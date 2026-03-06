@@ -1,6 +1,7 @@
 import { WebPlugin } from '@capacitor/core';
 
 import type {
+  ConektaToken,
   ConektaTokenizerPlugin,
   CreateTokenOptions,
   CreateTokenResult,
@@ -13,15 +14,13 @@ declare const Conekta: {
   Token: {
     create(
       params: { card: Record<string, string> },
-      success: (token: { id: string }) => void,
+      success: (token: ConektaToken) => void,
       error: (err: { message_to_purchaser: string }) => void,
     ): void;
   };
 };
 
-export class ConektaTokenizerWeb
-  extends WebPlugin
-  implements ConektaTokenizerPlugin {
+export class ConektaTokenizerWeb extends WebPlugin implements ConektaTokenizerPlugin {
   private sdkLoaded = false;
   private sdkLoading: Promise<void> | null = null;
 
@@ -58,9 +57,7 @@ export class ConektaTokenizerWeb
 
     const { name, cardNumber, expMonth, expYear, cvc } = options;
     if (!name || !cardNumber || !expMonth || !expYear || !cvc) {
-      throw new Error(
-        'All card fields are required: name, cardNumber, expMonth, expYear, cvc',
-      );
+      throw new Error('All card fields are required: name, cardNumber, expMonth, expYear, cvc');
     }
 
     return new Promise<CreateTokenResult>((resolve, reject) => {
@@ -74,7 +71,7 @@ export class ConektaTokenizerWeb
             exp_year: expYear,
           },
         },
-        (token) => resolve({ token: token.id }),
+        (token) => resolve({ token }),
         (err) => reject(new Error(err.message_to_purchaser)),
       );
     });

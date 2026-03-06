@@ -63,11 +63,46 @@ export interface CreateTokenOptions {
   cvc: string;
 }
 
-export interface CreateTokenResult {
+export interface ConektaToken {
   /**
-   * The generated single-use payment token ID (e.g., `tok_xxxxxxxx`).
+   * The single-use payment token ID (e.g., `tok_xxxxxxxx`).
    *
    * @since 1.0.0
    */
-  token: string;
+  id: string;
+
+  /**
+   * Whether this token was created in live mode.
+   *
+   * @since 1.1.0
+   */
+  livemode: boolean;
+
+  /**
+   * Whether this token has already been used.
+   *
+   * @since 1.1.0
+   */
+  used: boolean;
+
+  /**
+   * Object type (always `"token"`).
+   *
+   * @since 1.1.0
+   */
+  object: string;
+
+  /**
+   * Additional fields returned by the Conekta API.
+   */
+  [key: string]: unknown;
+}
+
+export interface CreateTokenResult {
+  /**
+   * The full Conekta token object.
+   *
+   * @since 1.1.0
+   */
+  token: ConektaToken;
 }

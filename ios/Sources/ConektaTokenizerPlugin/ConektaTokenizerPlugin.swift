@@ -43,8 +43,8 @@ public class ConektaTokenizerPlugin: CAPPlugin, CAPBridgedPlugin {
             cvc: cvc
         ) { result in
             switch result {
-            case .success(let tokenId):
-                call.resolve(["token": tokenId])
+            case .success(let tokenObj):
+                call.resolve(["token": tokenObj])
             case .failure(let error):
                 call.reject(error.localizedDescription)
             }

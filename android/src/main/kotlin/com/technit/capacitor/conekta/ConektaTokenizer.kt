@@ -30,7 +30,7 @@ class ConektaTokenizer {
                 Conekta.Token.create({
                     card: { name: name, number: number, cvc: cvc, exp_month: expMonth, exp_year: expYear }
                 }, function(token) {
-                    ConektaBridge.onResult(JSON.stringify({type:'token', success:true, token:token.id}));
+                    ConektaBridge.onResult(JSON.stringify({type:'token', success:true, token:token}));
                 }, function(error) {
                     ConektaBridge.onResult(JSON.stringify({type:'token', success:false, error:error.message_to_purchaser || 'Token creation failed'}));
                 });
@@ -46,7 +46,7 @@ class ConektaTokenizer {
     private var publicKey: String? = null
     private var sdkReady = false
     private var sdkReadyCallback: (() -> Unit)? = null
-    private var tokenSuccess: ((String) -> Unit)? = null
+    private var tokenSuccess: ((JSONObject) -> Unit)? = null
     private var tokenError: ((String) -> Unit)? = null
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -73,7 +73,7 @@ class ConektaTokenizer {
         expMonth: String,
         expYear: String,
         cvc: String,
-        onSuccess: (String) -> Unit,
+        onSuccess: (JSONObject) -> Unit,
         onError: (String) -> Unit
     ) {
         val key = publicKey
@@ -124,8 +124,8 @@ class ConektaTokenizer {
                 "token" -> {
                     val success = json.optBoolean("success", false)
                     if (success) {
-                        val tokenId = json.optString("token", "")
-                        tokenSuccess?.invoke(tokenId)
+                        val tokenObj = json.optJSONObject("token") ?: JSONObject()
+                        tokenSuccess?.invoke(tokenObj)
                     } else {
                         val error = json.optString("error", "Token creation failed")
                         tokenError?.invoke(error)

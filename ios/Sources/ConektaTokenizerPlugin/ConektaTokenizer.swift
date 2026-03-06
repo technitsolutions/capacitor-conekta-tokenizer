@@ -6,7 +6,7 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler {
     private var publicKey: String?
     private var sdkReady = false
     private var sdkReadyCompletion: (() -> Void)?
-    private var tokenCompletion: ((Result<String, Error>) -> Void)?
+    private var tokenCompletion: ((Result<[String: Any], Error>) -> Void)?
 
     private static let html = """
     <!DOCTYPE html>
@@ -25,7 +25,7 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler {
         Conekta.Token.create({
             card: { name: name, number: number, cvc: cvc, exp_month: expMonth, exp_year: expYear }
         }, function(token) {
-            window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({type:'token', success:true, token:token.id}));
+            window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({type:'token', success:true, token:token}));
         }, function(error) {
             window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({type:'token', success:false, error:error.message_to_purchaser || 'Token creation failed'}));
         });
@@ -67,7 +67,7 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler {
         expMonth: String,
         expYear: String,
         cvc: String,
-        completion: @escaping (Result<String, Error>) -> Void
+        completion: @escaping (Result<[String: Any], Error>) -> Void
     ) {
         guard let publicKey = self.publicKey else {
             completion(.failure(ConektaError.publicKeyNotSet))
@@ -122,8 +122,8 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler {
             sdkReadyCompletion = nil
         case "token":
             let success = json["success"] as? Bool ?? false
-            if success, let tokenId = json["token"] as? String {
-                tokenCompletion?(.success(tokenId))
+            if success, let tokenObj = json["token"] as? [String: Any] {
+                tokenCompletion?(.success(tokenObj))
             } else {
                 let errorMsg = json["error"] as? String ?? "Token creation failed"
                 tokenCompletion?(.failure(ConektaError.apiError(errorMsg)))

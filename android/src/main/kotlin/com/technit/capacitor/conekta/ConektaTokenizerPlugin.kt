@@ -45,9 +45,9 @@ class ConektaTokenizerPlugin : Plugin() {
             expMonth = expMonth,
             expYear = expYear,
             cvc = cvc,
-            onSuccess = { tokenId ->
+            onSuccess = { tokenObj ->
                 val ret = JSObject()
-                ret.put("token", tokenId)
+                ret.put("token", JSObject(tokenObj.toString()))
                 call.resolve(ret)
             },
             onError = { message ->
