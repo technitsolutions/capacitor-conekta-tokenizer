@@ -12,11 +12,11 @@ This plugin solves the problem by making **direct HTTP POST requests** to the Co
 
 ## Platform Support
 
-| Platform | Min Version | Implementation |
-| -------- | ----------- | -------------- |
-| iOS      | 15.0+       | URLSession     |
-| Android  | API 23+     | HttpURLConnection |
-| Web      | Modern browsers | fetch() |
+| Platform | Min Version     | Implementation    |
+| -------- | --------------- | ----------------- |
+| iOS      | 15.0+           | URLSession        |
+| Android  | API 23+         | HttpURLConnection |
+| Web      | Modern browsers | fetch()           |
 
 ## Install
 
@@ -49,9 +49,9 @@ console.log('Token:', token); // tok_xxxxxxxx
 
 <docgen-index>
 
-* [`setPublicKey(...)`](#setpublickey)
-* [`createToken(...)`](#createtoken)
-* [Interfaces](#interfaces)
+- [`setPublicKey(...)`](#setpublickey)
+- [`createToken(...)`](#createtoken)
+- [Interfaces](#interfaces)
 
 </docgen-index>
 
@@ -72,8 +72,7 @@ Set the Conekta public API key for tokenization.
 
 **Since:** 1.0.0
 
---------------------
-
+---
 
 ### createToken(...)
 
@@ -94,11 +93,9 @@ and returns a single-use token ID.
 
 **Since:** 1.0.0
 
---------------------
-
+---
 
 ### Interfaces
-
 
 #### SetPublicKeyOptions
 
@@ -106,13 +103,11 @@ and returns a single-use token ID.
 | --------------- | ------------------- | --------------------------------------------------- | ----- |
 | **`publicKey`** | <code>string</code> | Your Conekta public API key (e.g., `key_xxxxxxxx`). | 1.0.0 |
 
-
 #### CreateTokenResult
 
 | Prop        | Type                | Description                                                       | Since |
 | ----------- | ------------------- | ----------------------------------------------------------------- | ----- |
 | **`token`** | <code>string</code> | The generated single-use payment token ID (e.g., `tok_xxxxxxxx`). | 1.0.0 |
-
 
 #### CreateTokenOptions
 
