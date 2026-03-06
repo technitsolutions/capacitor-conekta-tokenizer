@@ -12,6 +12,10 @@ public class ConektaTokenizerPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private let implementation = ConektaTokenizer()
 
+    override public func load() {
+        implementation.setup()
+    }
+
     @objc func setPublicKey(_ call: CAPPluginCall) {
         guard let publicKey = call.getString("publicKey") else {
             call.reject("publicKey is required")

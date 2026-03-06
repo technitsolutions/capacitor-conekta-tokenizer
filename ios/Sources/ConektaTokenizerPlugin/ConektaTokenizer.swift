@@ -1,11 +1,64 @@
 import Foundation
+import WebKit
 
-public class ConektaTokenizer {
-    private static let apiBase = "https://api.conekta.io"
+public class ConektaTokenizer: NSObject, WKScriptMessageHandler {
+    private var webView: WKWebView?
     private var publicKey: String?
+    private var sdkReady = false
+    private var sdkReadyCompletion: (() -> Void)?
+    private var tokenCompletion: ((Result<String, Error>) -> Void)?
+
+    private static let html = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <script src="https://cdn.conekta.io/js/latest/conekta.js"></script>
+    <script>
+    window.addEventListener('load', function() {
+        window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({type:'ready'}));
+    });
+    function initConekta(publicKey) {
+        Conekta.setPublicKey(publicKey);
+        Conekta.setLanguage('es');
+    }
+    function createToken(name, number, cvc, expMonth, expYear) {
+        Conekta.Token.create({
+            card: { name: name, number: number, cvc: cvc, exp_month: expMonth, exp_year: expYear }
+        }, function(token) {
+            window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({type:'token', success:true, token:token.id}));
+        }, function(error) {
+            window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({type:'token', success:false, error:error.message_to_purchaser || 'Token creation failed'}));
+        });
+    }
+    </script>
+    </head>
+    <body></body>
+    </html>
+    """
+
+    public func setup() {
+        DispatchQueue.main.async {
+            let config = WKWebViewConfiguration()
+            config.userContentController.add(self, name: "conektaResult")
+            let wv = WKWebView(frame: .zero, configuration: config)
+            self.webView = wv
+            wv.loadHTMLString(ConektaTokenizer.html, baseURL: URL(string: "https://conekta.com"))
+        }
+    }
 
     public func setPublicKey(_ publicKey: String) {
         self.publicKey = publicKey
+    }
+
+    private func ensureReady(completion: @escaping () -> Void) {
+        if sdkReady {
+            completion()
+            return
+        }
+        sdkReadyCompletion = completion
+        if webView == nil {
+            setup()
+        }
     }
 
     public func createToken(
@@ -21,100 +74,78 @@ public class ConektaTokenizer {
             return
         }
 
-        guard let url = URL(string: "\(ConektaTokenizer.apiBase)/tokens") else {
-            completion(.failure(ConektaError.invalidURL))
-            return
-        }
+        self.tokenCompletion = completion
 
-        let body: [String: Any] = [
-            "card": [
-                "number": cardNumber,
-                "name": name,
-                "cvc": cvc,
-                "exp_month": expMonth,
-                "exp_year": expYear
-            ]
-        ]
-
-        guard let jsonData = try? JSONSerialization.data(withJSONObject: body) else {
-            completion(.failure(ConektaError.serializationFailed))
-            return
-        }
-
-        let credentials = "\(publicKey):"
-        guard let credentialData = credentials.data(using: .utf8) else {
-            completion(.failure(ConektaError.serializationFailed))
-            return
-        }
-        let base64Credentials = credentialData.base64EncodedString()
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.httpBody = jsonData
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("application/vnd.conekta-v2.2.0+json", forHTTPHeaderField: "Accept")
-        request.setValue("Basic \(base64Credentials)", forHTTPHeaderField: "Authorization")
-
-        let task = URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                completion(.failure(error))
+        ensureReady { [weak self] in
+            guard let self = self, let webView = self.webView else {
+                completion(.failure(ConektaError.webViewNotReady))
                 return
             }
 
-            guard let data = data else {
-                completion(.failure(ConektaError.emptyResponse))
-                return
-            }
+            DispatchQueue.main.async {
+                let initJS = "initConekta('\(publicKey.replacingOccurrences(of: "'", with: "\\'"))');"
+                let tokenJS = "createToken('\(name.replacingOccurrences(of: "'", with: "\\'"))', '\(cardNumber)', '\(cvc)', '\(expMonth)', '\(expYear)');"
 
-            do {
-                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    completion(.failure(ConektaError.invalidResponse))
-                    return
+                webView.evaluateJavaScript(initJS) { _, error in
+                    if let error = error {
+                        completion(.failure(error))
+                        return
+                    }
+                    webView.evaluateJavaScript(tokenJS) { _, error in
+                        if let error = error {
+                            completion(.failure(error))
+                        }
+                        // Result comes via WKScriptMessageHandler
+                    }
                 }
-
-                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode != 200 {
-                    let message = (json["details"] as? [[String: Any]])?.first?["message"] as? String
-                        ?? json["message"] as? String
-                        ?? "Conekta API error: \(httpResponse.statusCode)"
-                    completion(.failure(ConektaError.apiError(message)))
-                    return
-                }
-
-                guard let tokenId = json["id"] as? String else {
-                    completion(.failure(ConektaError.invalidResponse))
-                    return
-                }
-
-                completion(.success(tokenId))
-            } catch {
-                completion(.failure(error))
             }
         }
+    }
 
-        task.resume()
+    // MARK: - WKScriptMessageHandler
+
+    public func userContentController(
+        _ userContentController: WKUserContentController,
+        didReceive message: WKScriptMessage
+    ) {
+        guard let body = message.body as? String,
+              let data = body.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let type = json["type"] as? String else {
+            return
+        }
+
+        switch type {
+        case "ready":
+            sdkReady = true
+            sdkReadyCompletion?()
+            sdkReadyCompletion = nil
+        case "token":
+            let success = json["success"] as? Bool ?? false
+            if success, let tokenId = json["token"] as? String {
+                tokenCompletion?(.success(tokenId))
+            } else {
+                let errorMsg = json["error"] as? String ?? "Token creation failed"
+                tokenCompletion?(.failure(ConektaError.apiError(errorMsg)))
+            }
+            tokenCompletion = nil
+        default:
+            break
+        }
     }
 }
 
 enum ConektaError: LocalizedError {
     case publicKeyNotSet
-    case invalidURL
-    case serializationFailed
-    case emptyResponse
-    case invalidResponse
+    case webViewNotReady
     case apiError(String)
 
     var errorDescription: String? {
         switch self {
         case .publicKeyNotSet:
             return "Public key not set. Call setPublicKey() before createToken()."
-        case .invalidURL:
-            return "Invalid Conekta API URL."
-        case .serializationFailed:
-            return "Failed to serialize request data."
-        case .emptyResponse:
-            return "Empty response from Conekta API."
-        case .invalidResponse:
-            return "Invalid response from Conekta API."
+        case .webViewNotReady:
+            return "Conekta WebView is not ready."
         case .apiError(let message):
             return message
         }

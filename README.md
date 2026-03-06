@@ -1,22 +1,22 @@
 # @technitsolutions/capacitor-conekta-tokenizer
 
-Capacitor 8 plugin for Conekta card tokenization. Creates single-use payment tokens from card details via direct API calls to Conekta, bypassing iframe/SDK compatibility issues on mobile platforms.
+Capacitor 8 plugin for Conekta card tokenization. Creates single-use payment tokens from card details using the official Conekta JS SDK in a hidden WebView, ensuring PCI compliance and proper device fingerprinting on all platforms.
 
-> Based on [capacitor-conketa](https://gitlab.com/jorge.enriquez/capacitor-conketa) by [Jorge Enriquez](https://gitlab.com/jorge.enriquez). Modernized for Capacitor 8 with direct HTTP tokenization (no deprecated SDK dependencies).
+> Based on [capacitor-conketa](https://gitlab.com/jorge.enriquez/capacitor-conketa) by [Jorge Enriquez](https://gitlab.com/jorge.enriquez). Modernized for Capacitor 8 with hidden WebView tokenization approach.
 
 ## Why This Plugin?
 
 Conekta's web tokenizer (`ConektaCheckoutComponents.Card()`) uses a zoid-based iframe that **does not work on iOS** because Capacitor uses the `capacitor://` custom URL scheme, and zoid's cross-origin iframe communication fails with non-standard schemes. Setting `iosScheme: 'https'` is also not viable because WKWebView rejects registering scheme handlers for standard schemes.
 
-This plugin solves the problem by making **direct HTTP POST requests** to the Conekta tokenization API (`https://api.conekta.io/tokens`) from native code, completely bypassing iframe and WebView limitations.
+This plugin solves the problem by loading the **official Conekta JS SDK** (`conekta.js`) inside a **hidden WebView** on native platforms. The hidden WebView uses `https://conekta.com` as its base URL, giving the SDK a proper HTTPS origin. This ensures device fingerprinting, anti-fraud data collection, and PCI-compliant tokenization work correctly — without any iframe or URL scheme issues.
 
 ## Platform Support
 
-| Platform | Min Version     | Implementation    |
-| -------- | --------------- | ----------------- |
-| iOS      | 15.0+           | URLSession        |
-| Android  | API 23+         | HttpURLConnection |
-| Web      | Modern browsers | fetch()           |
+| Platform | Min Version     | Implementation                      |
+| -------- | --------------- | ----------------------------------- |
+| iOS      | 15.0+           | Hidden WKWebView + Conekta JS SDK   |
+| Android  | API 23+         | Hidden WebView + Conekta JS SDK     |
+| Web      | Modern browsers | Conekta JS SDK (dynamically loaded) |
 
 ## Install
 
@@ -49,9 +49,9 @@ console.log('Token:', token); // tok_xxxxxxxx
 
 <docgen-index>
 
-- [`setPublicKey(...)`](#setpublickey)
-- [`createToken(...)`](#createtoken)
-- [Interfaces](#interfaces)
+* [`setPublicKey(...)`](#setpublickey)
+* [`createToken(...)`](#createtoken)
+* [Interfaces](#interfaces)
 
 </docgen-index>
 
@@ -72,7 +72,8 @@ Set the Conekta public API key for tokenization.
 
 **Since:** 1.0.0
 
----
+--------------------
+
 
 ### createToken(...)
 
@@ -93,9 +94,11 @@ and returns a single-use token ID.
 
 **Since:** 1.0.0
 
----
+--------------------
+
 
 ### Interfaces
+
 
 #### SetPublicKeyOptions
 
@@ -103,11 +106,13 @@ and returns a single-use token ID.
 | --------------- | ------------------- | --------------------------------------------------- | ----- |
 | **`publicKey`** | <code>string</code> | Your Conekta public API key (e.g., `key_xxxxxxxx`). | 1.0.0 |
 
+
 #### CreateTokenResult
 
 | Prop        | Type                | Description                                                       | Since |
 | ----------- | ------------------- | ----------------------------------------------------------------- | ----- |
 | **`token`** | <code>string</code> | The generated single-use payment token ID (e.g., `tok_xxxxxxxx`). | 1.0.0 |
+
 
 #### CreateTokenOptions
 
@@ -123,11 +128,11 @@ and returns a single-use token ID.
 
 ## iOS Setup
 
-No additional setup required. The plugin uses `URLSession` for direct HTTP calls.
+No additional setup required. The plugin creates a hidden `WKWebView` to load the Conekta JS SDK.
 
 ## Android Setup
 
-No additional setup required. The plugin uses `HttpURLConnection` for direct HTTP calls. The `INTERNET` permission is declared in the plugin's manifest.
+No additional setup required. The plugin creates a hidden `WebView` to load the Conekta JS SDK. The `INTERNET` permission is declared in the plugin's manifest.
 
 ### Register the Plugin
 
@@ -146,25 +151,15 @@ class MainActivity : BridgeActivity() {
 
 ## How It Works
 
-Instead of using Conekta's iframe tokenizer or deprecated native SDKs, this plugin makes a direct `POST` request to:
+Instead of using Conekta's iframe tokenizer (which breaks on Capacitor iOS) or deprecated native SDKs, this plugin:
 
-```
-POST https://api.conekta.io/tokens
-Authorization: Basic {base64(publicKey + ":")}
-Content-Type: application/json
+1. Creates a **hidden WebView** (invisible to the user) on plugin load
+2. Loads the official **Conekta JS SDK** (`https://cdn.conekta.io/js/latest/conekta.js`) with `https://conekta.com` as the base URL
+3. When `createToken()` is called, it executes `Conekta.Token.create()` inside the hidden WebView
+4. The SDK handles device fingerprinting, PCI compliance, and API communication
+5. The token result is passed back to native code via message handlers
 
-{
-  "card": {
-    "number": "4242424242424242",
-    "name": "John Doe",
-    "cvc": "123",
-    "exp_month": "12",
-    "exp_year": "25"
-  }
-}
-```
-
-This approach works reliably across all platforms without iframe or WebView restrictions.
+This ensures tokens are created through Conekta's official SDK flow and are accepted for charges.
 
 ## Acknowledgments
 

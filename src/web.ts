@@ -7,27 +7,54 @@ import type {
   SetPublicKeyOptions,
 } from './definitions';
 
-const CONEKTA_API_BASE = 'https://api.conekta.io';
+declare const Conekta: {
+  setPublicKey(key: string): void;
+  setLanguage(lang: string): void;
+  Token: {
+    create(
+      params: { card: Record<string, string> },
+      success: (token: { id: string }) => void,
+      error: (err: { message_to_purchaser: string }) => void,
+    ): void;
+  };
+};
 
 export class ConektaTokenizerWeb
   extends WebPlugin
-  implements ConektaTokenizerPlugin
-{
-  private publicKey: string | null = null;
+  implements ConektaTokenizerPlugin {
+  private sdkLoaded = false;
+  private sdkLoading: Promise<void> | null = null;
+
+  private loadSdk(): Promise<void> {
+    if (this.sdkLoaded) return Promise.resolve();
+    if (this.sdkLoading) return this.sdkLoading;
+
+    this.sdkLoading = new Promise<void>((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.conekta.io/js/latest/conekta.js';
+      script.async = true;
+      script.onload = () => {
+        this.sdkLoaded = true;
+        resolve();
+      };
+      script.onerror = () => reject(new Error('Failed to load Conekta JS SDK'));
+      document.head.appendChild(script);
+    });
+
+    return this.sdkLoading;
+  }
 
   async setPublicKey(options: SetPublicKeyOptions): Promise<void> {
     if (!options.publicKey) {
       throw new Error('publicKey is required');
     }
-    this.publicKey = options.publicKey;
+    await this.loadSdk();
+    Conekta.setPublicKey(options.publicKey);
+    Conekta.setLanguage('es');
   }
 
   async createToken(options: CreateTokenOptions): Promise<CreateTokenResult> {
-    if (!this.publicKey) {
-      throw new Error(
-        'Public key not set. Call setPublicKey() before createToken().',
-      );
-    }
+    await this.loadSdk();
 
     const { name, cardNumber, expMonth, expYear, cvc } = options;
     if (!name || !cardNumber || !expMonth || !expYear || !cvc) {
@@ -36,41 +63,20 @@ export class ConektaTokenizerWeb
       );
     }
 
-    const body = JSON.stringify({
-      card: {
-        number: cardNumber,
-        name,
-        cvc,
-        exp_month: expMonth,
-        exp_year: expYear,
-      },
+    return new Promise<CreateTokenResult>((resolve, reject) => {
+      Conekta.Token.create(
+        {
+          card: {
+            name,
+            number: cardNumber,
+            cvc,
+            exp_month: expMonth,
+            exp_year: expYear,
+          },
+        },
+        (token) => resolve({ token: token.id }),
+        (err) => reject(new Error(err.message_to_purchaser)),
+      );
     });
-
-    const response = await fetch(`${CONEKTA_API_BASE}/tokens`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/vnd.conekta-v2.2.0+json',
-        Authorization: `Basic ${btoa(this.publicKey + ':')}`,
-      },
-      body,
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({}));
-      const message =
-        error?.details?.[0]?.message ||
-        error?.message ||
-        `Conekta API error: ${response.status}`;
-      throw new Error(message);
-    }
-
-    const data = await response.json();
-
-    if (!data.id) {
-      throw new Error('Invalid response from Conekta API: missing token id');
-    }
-
-    return { token: data.id };
   }
 }

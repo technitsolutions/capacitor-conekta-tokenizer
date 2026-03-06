@@ -11,6 +11,10 @@ class ConektaTokenizerPlugin : Plugin() {
 
     private val implementation = ConektaTokenizer()
 
+    override fun load() {
+        implementation.setup(activity)
+    }
+
     @PluginMethod
     fun setPublicKey(call: PluginCall) {
         val publicKey = call.getString("publicKey")

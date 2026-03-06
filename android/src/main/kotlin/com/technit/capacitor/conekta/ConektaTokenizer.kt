@@ -1,21 +1,67 @@
 package com.technit.capacitor.conekta
 
-import android.util.Base64
+import android.annotation.SuppressLint
+import android.app.Activity
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.io.OutputStreamWriter
-import java.net.HttpURLConnection
-import java.net.URL
 
 class ConektaTokenizer {
     companion object {
         private const val TAG = "ConektaTokenizer"
-        private const val API_BASE = "https://api.conekta.io"
+        private val HTML = """
+            <!DOCTYPE html>
+            <html>
+            <head>
+            <script src="https://cdn.conekta.io/js/latest/conekta.js"></script>
+            <script>
+            window.addEventListener('load', function() {
+                ConektaBridge.onResult(JSON.stringify({type:'ready'}));
+            });
+            function initConekta(publicKey) {
+                Conekta.setPublicKey(publicKey);
+                Conekta.setLanguage('es');
+            }
+            function createToken(name, number, cvc, expMonth, expYear) {
+                Conekta.Token.create({
+                    card: { name: name, number: number, cvc: cvc, exp_month: expMonth, exp_year: expYear }
+                }, function(token) {
+                    ConektaBridge.onResult(JSON.stringify({type:'token', success:true, token:token.id}));
+                }, function(error) {
+                    ConektaBridge.onResult(JSON.stringify({type:'token', success:false, error:error.message_to_purchaser || 'Token creation failed'}));
+                });
+            }
+            </script>
+            </head>
+            <body></body>
+            </html>
+        """.trimIndent()
     }
 
+    private var webView: WebView? = null
     private var publicKey: String? = null
+    private var sdkReady = false
+    private var sdkReadyCallback: (() -> Unit)? = null
+    private var tokenSuccess: ((String) -> Unit)? = null
+    private var tokenError: ((String) -> Unit)? = null
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    @SuppressLint("SetJavaScriptEnabled")
+    fun setup(activity: Activity) {
+        mainHandler.post {
+            val wv = WebView(activity)
+            wv.settings.javaScriptEnabled = true
+            wv.settings.domStorageEnabled = true
+            wv.addJavascriptInterface(this, "ConektaBridge")
+            wv.webViewClient = WebViewClient()
+            wv.loadDataWithBaseURL("https://conekta.com", HTML, "text/html", "UTF-8", null)
+            webView = wv
+        }
+    }
 
     fun setPublicKey(publicKey: String) {
         this.publicKey = publicKey
@@ -36,73 +82,63 @@ class ConektaTokenizer {
             return
         }
 
-        Thread {
-            try {
-                val url = URL("$API_BASE/tokens")
-                val connection = url.openConnection() as HttpURLConnection
-                connection.requestMethod = "POST"
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.setRequestProperty("Accept", "application/vnd.conekta-v2.2.0+json")
+        tokenSuccess = onSuccess
+        tokenError = onError
 
-                val credentials = "$key:"
-                val encoded = Base64.encodeToString(credentials.toByteArray(), Base64.NO_WRAP)
-                connection.setRequestProperty("Authorization", "Basic $encoded")
-
-                connection.doOutput = true
-
-                val card = JSONObject().apply {
-                    put("number", cardNumber)
-                    put("name", name)
-                    put("cvc", cvc)
-                    put("exp_month", expMonth)
-                    put("exp_year", expYear)
+        val doTokenize = {
+            mainHandler.post {
+                val wv = webView
+                if (wv == null) {
+                    onError("Conekta WebView is not ready.")
+                    return@post
                 }
 
-                val body = JSONObject().apply {
-                    put("card", card)
-                }
+                val escapedKey = key.replace("'", "\\'")
+                val escapedName = name.replace("'", "\\'")
 
-                val writer = OutputStreamWriter(connection.outputStream)
-                writer.write(body.toString())
-                writer.flush()
-                writer.close()
-
-                val responseCode = connection.responseCode
-                val stream = if (responseCode == HttpURLConnection.HTTP_OK) {
-                    connection.inputStream
-                } else {
-                    connection.errorStream
-                }
-
-                val reader = BufferedReader(InputStreamReader(stream))
-                val response = reader.readText()
-                reader.close()
-                connection.disconnect()
-
-                val json = JSONObject(response)
-
-                if (responseCode != HttpURLConnection.HTTP_OK) {
-                    val message = try {
-                        json.optJSONArray("details")?.optJSONObject(0)?.optString("message")
-                            ?: json.optString("message", "Conekta API error: $responseCode")
-                    } catch (e: Exception) {
-                        "Conekta API error: $responseCode"
-                    }
-                    onError(message)
-                    return@Thread
-                }
-
-                val tokenId = json.optString("id", "")
-                if (tokenId.isEmpty()) {
-                    onError("Invalid response from Conekta API: missing token id")
-                    return@Thread
-                }
-
-                onSuccess(tokenId)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error creating token", e)
-                onError(e.message ?: "Unknown error creating token")
+                wv.evaluateJavascript("initConekta('$escapedKey')", null)
+                wv.evaluateJavascript(
+                    "createToken('$escapedName', '$cardNumber', '$cvc', '$expMonth', '$expYear')",
+                    null
+                )
             }
-        }.start()
+        }
+
+        if (sdkReady) {
+            doTokenize()
+        } else {
+            sdkReadyCallback = doTokenize
+        }
+    }
+
+    @JavascriptInterface
+    fun onResult(jsonStr: String) {
+        try {
+            val json = JSONObject(jsonStr)
+            when (json.optString("type")) {
+                "ready" -> {
+                    sdkReady = true
+                    sdkReadyCallback?.invoke()
+                    sdkReadyCallback = null
+                }
+                "token" -> {
+                    val success = json.optBoolean("success", false)
+                    if (success) {
+                        val tokenId = json.optString("token", "")
+                        tokenSuccess?.invoke(tokenId)
+                    } else {
+                        val error = json.optString("error", "Token creation failed")
+                        tokenError?.invoke(error)
+                    }
+                    tokenSuccess = null
+                    tokenError = null
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing WebView result", e)
+            tokenError?.invoke(e.message ?: "Unknown error")
+            tokenError = null
+            tokenSuccess = null
+        }
     }
 }
