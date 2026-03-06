@@ -1,0 +1,8 @@
+dist/
+node_modules/
+ios/Pods/
+ios/.build/
+android/.gradle/
+android/build/
+.DS_Store
+*.tgz

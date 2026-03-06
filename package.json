@@ -1,0 +1,94 @@
+{
+  "name": "@technitsolutions/capacitor-conekta-tokenizer",
+  "version": "1.0.0",
+  "description": "Capacitor 8 plugin for Conekta card tokenization - create payment tokens from card details via direct API calls",
+  "main": "dist/plugin.cjs.js",
+  "module": "dist/esm/index.js",
+  "types": "dist/esm/index.d.ts",
+  "unpkg": "dist/plugin.js",
+  "files": [
+    "android/src/main/",
+    "android/build.gradle",
+    "android/gradle/",
+    "android/gradlew",
+    "android/gradlew.bat",
+    "android/settings.gradle",
+    "android/gradle.properties",
+    "android/proguard-rules.pro",
+    "dist/",
+    "ios/Sources/",
+    "ios/Tests/",
+    "Package.swift",
+    "CapacitorConektaTokenizer.podspec",
+    "LICENSE"
+  ],
+  "author": "Technit Solutions",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/technitsolutions/capacitor-conekta-tokenizer.git"
+  },
+  "bugs": {
+    "url": "https://github.com/technitsolutions/capacitor-conekta-tokenizer/issues"
+  },
+  "homepage": "https://github.com/technitsolutions/capacitor-conekta-tokenizer#readme",
+  "contributors": [
+    {
+      "name": "Jorge Enriquez",
+      "url": "https://gitlab.com/jorge.enriquez"
+    }
+  ],
+  "keywords": [
+    "capacitor",
+    "plugin",
+    "native",
+    "conekta",
+    "tokenizer",
+    "payment",
+    "card",
+    "token"
+  ],
+  "scripts": {
+    "verify": "npm run verify:ios && npm run verify:android && npm run verify:web",
+    "verify:ios": "cd ios && pod install && xcodebuild -workspace Plugin.xcworkspace -scheme Plugin -destination generic/platform=iOS build",
+    "verify:android": "cd android && ./gradlew clean build",
+    "verify:web": "npm run build",
+    "lint": "npm run eslint && npm run prettier -- --check",
+    "fmt": "npm run eslint -- --fix && npm run prettier -- --write",
+    "eslint": "eslint . --ext ts",
+    "prettier": "prettier \"**/*.{css,html,ts,js,java}\" --plugin=prettier-plugin-java",
+    "build": "npm run clean && npm run docgen && tsc && rollup -c rollup.config.mjs",
+    "clean": "rimraf ./dist",
+    "watch": "tsc --watch",
+    "docgen": "docgen --api ConektaTokenizerPlugin --output-readme README.md --output-json dist/docs.json",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.0.0",
+    "@capacitor/core": "^8.0.0",
+    "@capacitor/docgen": "^0.2.2",
+    "@ionic/eslint-config": "^0.4.0",
+    "@ionic/prettier-config": "^4.0.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.0",
+    "prettier-plugin-java": "^2.6.0",
+    "rimraf": "^6.0.0",
+    "rollup": "^4.18.0",
+    "typescript": "~5.5.0"
+  },
+  "peerDependencies": {
+    "@capacitor/core": "^8.0.0"
+  },
+  "capacitor": {
+    "ios": {
+      "src": "ios"
+    },
+    "android": {
+      "src": "android"
+    }
+  },
+  "prettier": "@ionic/prettier-config",
+  "eslintConfig": {
+    "extends": "@ionic/eslint-config/recommended"
+  }
+}
