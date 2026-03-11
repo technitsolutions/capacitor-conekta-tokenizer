@@ -85,7 +85,7 @@ class ConektaTokenizer {
         tokenSuccess = onSuccess
         tokenError = onError
 
-        val doTokenize = {
+        val doTokenize: () -> Unit = {
             mainHandler.post {
                 val wv = webView
                 if (wv == null) {
