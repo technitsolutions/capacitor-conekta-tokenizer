@@ -51,9 +51,9 @@ console.log('Full token:', token);
 
 <docgen-index>
 
-- [`setPublicKey(...)`](#setpublickey)
-- [`createToken(...)`](#createtoken)
-- [Interfaces](#interfaces)
+* [`setPublicKey(...)`](#setpublickey)
+* [`createToken(...)`](#createtoken)
+* [Interfaces](#interfaces)
 
 </docgen-index>
 
@@ -74,7 +74,8 @@ Set the Conekta public API key for tokenization.
 
 **Since:** 1.0.0
 
----
+--------------------
+
 
 ### createToken(...)
 
@@ -95,9 +96,11 @@ and returns a single-use token ID.
 
 **Since:** 1.0.0
 
----
+--------------------
+
 
 ### Interfaces
+
 
 #### SetPublicKeyOptions
 
@@ -105,11 +108,13 @@ and returns a single-use token ID.
 | --------------- | ------------------- | --------------------------------------------------- | ----- |
 | **`publicKey`** | <code>string</code> | Your Conekta public API key (e.g., `key_xxxxxxxx`). | 1.0.0 |
 
+
 #### CreateTokenResult
 
 | Prop        | Type                                                  | Description                    | Since |
 | ----------- | ----------------------------------------------------- | ------------------------------ | ----- |
 | **`token`** | <code><a href="#conektatoken">ConektaToken</a></code> | The full Conekta token object. | 1.1.0 |
+
 
 #### ConektaToken
 
@@ -119,6 +124,7 @@ and returns a single-use token ID.
 | **`livemode`** | <code>boolean</code> | Whether this token was created in live mode.            | 1.1.0 |
 | **`used`**     | <code>boolean</code> | Whether this token has already been used.               | 1.1.0 |
 | **`object`**   | <code>string</code>  | Object type (always `"token"`).                         | 1.1.0 |
+
 
 #### CreateTokenOptions
 

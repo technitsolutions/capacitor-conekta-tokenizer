@@ -83,8 +83,8 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler {
             }
 
             DispatchQueue.main.async {
-                let initJS = "initConekta('\(publicKey.replacingOccurrences(of: "'", with: "\\'"))');"
-                let tokenJS = "createToken('\(name.replacingOccurrences(of: "'", with: "\\'"))', '\(cardNumber)', '\(cvc)', '\(expMonth)', '\(expYear)');"
+                let initJS = "initConekta('\(publicKey.replacingOccurrences(of: "'", with: "\\'"))'); 0"
+                let tokenJS = "createToken('\(name.replacingOccurrences(of: "'", with: "\\'"))', '\(cardNumber)', '\(cvc)', '\(expMonth)', '\(expYear)'); 0"
 
                 webView.evaluateJavaScript(initJS) { _, error in
                     if let error = error {
