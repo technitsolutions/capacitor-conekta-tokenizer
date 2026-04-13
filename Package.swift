@@ -9,11 +9,16 @@ let package = Package(
             name: "ConektaTokenizerPlugin",
             targets: ["ConektaTokenizerPlugin"])
     ],
-    dependencies: [],
+    dependencies: [
+        .package(url: "https://github.com/ionic-team/capacitor-swift-pm.git", from: "8.0.0")
+    ],
     targets: [
         .target(
             name: "ConektaTokenizerPlugin",
-            dependencies: [],
+            dependencies: [
+                .product(name: "Capacitor", package: "capacitor-swift-pm"),
+                .product(name: "Cordova", package: "capacitor-swift-pm")
+            ],
             path: "ios/Sources/ConektaTokenizerPlugin"),
         .testTarget(
             name: "ConektaTokenizerPluginTests",

@@ -48,10 +48,11 @@ class ConektaTokenizer {
     private var sdkReadyCallback: (() -> Unit)? = null
     private var tokenSuccess: ((JSONObject) -> Unit)? = null
     private var tokenError: ((String) -> Unit)? = null
-    private val mainHandler = Handler(Looper.getMainLooper())
+    private lateinit var mainHandler: Handler
 
     @SuppressLint("SetJavaScriptEnabled")
     fun setup(activity: Activity) {
+        mainHandler = Handler(Looper.getMainLooper())
         mainHandler.post {
             val wv = WebView(activity)
             wv.settings.javaScriptEnabled = true
