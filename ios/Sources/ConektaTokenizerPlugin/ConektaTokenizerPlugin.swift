@@ -46,7 +46,14 @@ public class ConektaTokenizerPlugin: CAPPlugin, CAPBridgedPlugin {
             case .success(let tokenObj):
                 call.resolve(["token": tokenObj])
             case .failure(let error):
-                call.reject(error.localizedDescription)
+                if case let ConektaError.apiError(message, code, type, param, raw) = error {
+                    var data: [String: Any] = ["conektaError": raw]
+                    if let type = type { data["type"] = type }
+                    if let param = param { data["param"] = param }
+                    call.reject(message, code, error, data)
+                } else {
+                    call.reject(error.localizedDescription, nil, error)
+                }
             }
         }
     }

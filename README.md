@@ -47,6 +47,33 @@ console.log('Live mode:', token.livemode);
 console.log('Full token:', token);
 ```
 
+### Error handling
+
+When Conekta rejects the card, `createToken` rejects with a `ConektaTokenError`
+that preserves the full `conekta.js` error envelope. Use this to triage
+failures (expired card vs. bad Luhn vs. issuer rejection vs. CDN/SDK load
+failure) in your observability tool of choice.
+
+```typescript
+import type { ConektaTokenError } from '@technitsolutions/capacitor-conekta-tokenizer';
+
+try {
+  const { token } = await ConektaTokenizer.createToken({ /* ... */ });
+} catch (err) {
+  const e = err as ConektaTokenError;
+  // e.message        — user-facing `message_to_purchaser`
+  // e.code           — e.g. "conekta_js.invalid_expiration"
+  // e.type           — e.g. "parameter_validation_error"
+  // e.param          — offending field when Conekta reports one
+  // e.conektaError   — full raw envelope (log to Sentry `extra`, etc.)
+  Sentry.captureException(e, { extra: { conektaError: e.conektaError } });
+}
+```
+
+On native platforms (iOS / Android) the same fields are surfaced through
+Capacitor's error payload (`code` and `data.conektaError`), so the shape on
+the JS side is consistent across all three platforms.
+
 ## API
 
 <docgen-index>

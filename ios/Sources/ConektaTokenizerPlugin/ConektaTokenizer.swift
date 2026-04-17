@@ -27,7 +27,7 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler {
         }, function(token) {
             window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({type:'token', success:true, token:token}));
         }, function(error) {
-            window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({type:'token', success:false, error:error.message_to_purchaser || 'Token creation failed'}));
+            window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({type:'token', success:false, error: error || {message_to_purchaser: 'Token creation failed'}}));
         });
     }
     </script>
@@ -125,8 +125,24 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler {
             if success, let tokenObj = json["token"] as? [String: Any] {
                 tokenCompletion?(.success(tokenObj))
             } else {
-                let errorMsg = json["error"] as? String ?? "Token creation failed"
-                tokenCompletion?(.failure(ConektaError.apiError(errorMsg)))
+                let raw: [String: Any]
+                if let dict = json["error"] as? [String: Any] {
+                    raw = dict
+                } else if let str = json["error"] as? String {
+                    raw = ["message_to_purchaser": str]
+                } else {
+                    raw = [:]
+                }
+                let message = (raw["message_to_purchaser"] as? String)
+                    ?? (raw["message"] as? String)
+                    ?? "Token creation failed"
+                tokenCompletion?(.failure(ConektaError.apiError(
+                    message: message,
+                    code: raw["code"] as? String,
+                    type: raw["type"] as? String,
+                    param: raw["param"] as? String,
+                    raw: raw
+                )))
             }
             tokenCompletion = nil
         default:
@@ -138,7 +154,7 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler {
 enum ConektaError: LocalizedError {
     case publicKeyNotSet
     case webViewNotReady
-    case apiError(String)
+    case apiError(message: String, code: String?, type: String?, param: String?, raw: [String: Any])
 
     var errorDescription: String? {
         switch self {
@@ -146,7 +162,7 @@ enum ConektaError: LocalizedError {
             return "Public key not set. Call setPublicKey() before createToken()."
         case .webViewNotReady:
             return "Conekta WebView is not ready."
-        case .apiError(let message):
+        case .apiError(let message, _, _, _, _):
             return message
         }
     }

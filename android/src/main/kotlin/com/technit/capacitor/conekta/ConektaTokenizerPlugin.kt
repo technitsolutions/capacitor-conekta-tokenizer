@@ -50,8 +50,19 @@ class ConektaTokenizerPlugin : Plugin() {
                 ret.put("token", JSObject(tokenObj.toString()))
                 call.resolve(ret)
             },
-            onError = { message ->
-                call.reject(message)
+            onError = { raw ->
+                val message = when {
+                    raw.has("message_to_purchaser") -> raw.optString("message_to_purchaser")
+                    raw.has("message") -> raw.optString("message")
+                    else -> "Token creation failed"
+                }
+                val code = if (raw.has("code")) raw.optString("code") else null
+                val data = JSObject().apply {
+                    put("conektaError", JSObject(raw.toString()))
+                    if (raw.has("type")) put("type", raw.optString("type"))
+                    if (raw.has("param")) put("param", raw.optString("param"))
+                }
+                call.reject(message, code, null, data)
             }
         )
     }

@@ -1,7 +1,9 @@
 import { WebPlugin } from '@capacitor/core';
 
 import type {
+  ConektaRawError,
   ConektaToken,
+  ConektaTokenError,
   ConektaTokenizerPlugin,
   CreateTokenOptions,
   CreateTokenResult,
@@ -15,7 +17,7 @@ declare const Conekta: {
     create(
       params: { card: Record<string, string> },
       success: (token: ConektaToken) => void,
-      error: (err: { message_to_purchaser: string }) => void,
+      error: (err: ConektaRawError) => void,
     ): void;
   };
 };
@@ -72,7 +74,17 @@ export class ConektaTokenizerWeb extends WebPlugin implements ConektaTokenizerPl
           },
         },
         (token) => resolve({ token }),
-        (err) => reject(new Error(err.message_to_purchaser)),
+        (err) => {
+          const raw: ConektaRawError = err ?? {};
+          const message =
+            raw.message_to_purchaser || raw.message || 'Conekta token error';
+          const e = new Error(message) as ConektaTokenError;
+          if (typeof raw.code === 'string') e.code = raw.code;
+          if (typeof raw.type === 'string') e.type = raw.type;
+          if (typeof raw.param === 'string') e.param = raw.param;
+          e.conektaError = raw;
+          reject(e);
+        },
       );
     });
   }

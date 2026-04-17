@@ -32,7 +32,7 @@ class ConektaTokenizer {
                 }, function(token) {
                     ConektaBridge.onResult(JSON.stringify({type:'token', success:true, token:token}));
                 }, function(error) {
-                    ConektaBridge.onResult(JSON.stringify({type:'token', success:false, error:error.message_to_purchaser || 'Token creation failed'}));
+                    ConektaBridge.onResult(JSON.stringify({type:'token', success:false, error: error || {message_to_purchaser: 'Token creation failed'}}));
                 });
             }
             </script>
@@ -47,7 +47,7 @@ class ConektaTokenizer {
     private var sdkReady = false
     private var sdkReadyCallback: (() -> Unit)? = null
     private var tokenSuccess: ((JSONObject) -> Unit)? = null
-    private var tokenError: ((String) -> Unit)? = null
+    private var tokenError: ((JSONObject) -> Unit)? = null
     private lateinit var mainHandler: Handler
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -75,11 +75,11 @@ class ConektaTokenizer {
         expYear: String,
         cvc: String,
         onSuccess: (JSONObject) -> Unit,
-        onError: (String) -> Unit
+        onError: (JSONObject) -> Unit
     ) {
         val key = publicKey
         if (key == null) {
-            onError("Public key not set. Call setPublicKey() before createToken().")
+            onError(JSONObject().put("message_to_purchaser", "Public key not set. Call setPublicKey() before createToken()."))
             return
         }
 
@@ -90,7 +90,7 @@ class ConektaTokenizer {
             mainHandler.post {
                 val wv = webView
                 if (wv == null) {
-                    onError("Conekta WebView is not ready.")
+                    onError(JSONObject().put("message_to_purchaser", "Conekta WebView is not ready."))
                     return@post
                 }
 
@@ -128,8 +128,12 @@ class ConektaTokenizer {
                         val tokenObj = json.optJSONObject("token") ?: JSONObject()
                         tokenSuccess?.invoke(tokenObj)
                     } else {
-                        val error = json.optString("error", "Token creation failed")
-                        tokenError?.invoke(error)
+                        val raw = json.optJSONObject("error")
+                            ?: JSONObject().put(
+                                "message_to_purchaser",
+                                json.optString("error", "Token creation failed")
+                            )
+                        tokenError?.invoke(raw)
                     }
                     tokenSuccess = null
                     tokenError = null
@@ -137,7 +141,9 @@ class ConektaTokenizer {
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing WebView result", e)
-            tokenError?.invoke(e.message ?: "Unknown error")
+            tokenError?.invoke(
+                JSONObject().put("message_to_purchaser", e.message ?: "Unknown error")
+            )
             tokenError = null
             tokenSuccess = null
         }
