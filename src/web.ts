@@ -7,6 +7,7 @@ import type {
   ConektaTokenizerPlugin,
   CreateTokenOptions,
   CreateTokenResult,
+  IsReadyResult,
   SetPublicKeyOptions,
 } from './definitions';
 
@@ -43,6 +44,15 @@ export class ConektaTokenizerWeb extends WebPlugin implements ConektaTokenizerPl
     });
 
     return this.sdkLoading;
+  }
+
+  async warmUp(): Promise<IsReadyResult> {
+    await this.loadSdk();
+    return { ready: true };
+  }
+
+  async isReady(): Promise<IsReadyResult> {
+    return { ready: this.sdkLoaded };
   }
 
   async setPublicKey(options: SetPublicKeyOptions): Promise<void> {

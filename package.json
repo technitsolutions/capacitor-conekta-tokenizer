@@ -1,6 +1,6 @@
 {
   "name": "@technitsolutions/capacitor-conekta-tokenizer",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "Capacitor 8 plugin for Conekta card tokenization - create payment tokens from card details via direct API calls",
   "main": "dist/plugin.cjs.js",
   "module": "dist/esm/index.js",

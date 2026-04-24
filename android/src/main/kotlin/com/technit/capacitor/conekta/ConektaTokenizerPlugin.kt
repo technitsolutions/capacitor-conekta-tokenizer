@@ -27,6 +27,20 @@ class ConektaTokenizerPlugin : Plugin() {
     }
 
     @PluginMethod
+    fun isReady(call: PluginCall) {
+        call.resolve(JSObject().put("ready", implementation.isReady()))
+    }
+
+    @PluginMethod
+    fun warmUp(call: PluginCall) {
+        implementation.warmUp(
+            activity = activity,
+            onSuccess = { call.resolve(JSObject().put("ready", true)) },
+            onError = { failure -> rejectWithFailure(call, failure) }
+        )
+    }
+
+    @PluginMethod
     fun createToken(call: PluginCall) {
         val name = call.getString("name")
         val cardNumber = call.getString("cardNumber")
@@ -50,20 +64,23 @@ class ConektaTokenizerPlugin : Plugin() {
                 ret.put("token", JSObject(tokenObj.toString()))
                 call.resolve(ret)
             },
-            onError = { raw ->
-                val message = when {
-                    raw.has("message_to_purchaser") -> raw.optString("message_to_purchaser")
-                    raw.has("message") -> raw.optString("message")
-                    else -> "Token creation failed"
-                }
-                val code = if (raw.has("code")) raw.optString("code") else null
-                val data = JSObject().apply {
-                    put("conektaError", JSObject(raw.toString()))
-                    if (raw.has("type")) put("type", raw.optString("type"))
-                    if (raw.has("param")) put("param", raw.optString("param"))
-                }
-                call.reject(message, code, null, data)
-            }
+            onError = { failure -> rejectWithFailure(call, failure) }
         )
+    }
+
+    private fun rejectWithFailure(call: PluginCall, failure: ConektaTokenizer.ConektaFailure) {
+        val raw = failure.raw
+        val message = when {
+            raw.has("message_to_purchaser") -> raw.optString("message_to_purchaser")
+            raw.has("message") -> raw.optString("message")
+            else -> "Conekta error"
+        }
+        val code = failure.code ?: if (raw.has("code")) raw.optString("code") else null
+        val data = JSObject().apply {
+            put("conektaError", JSObject(raw.toString()))
+            if (raw.has("type")) put("type", raw.optString("type"))
+            if (raw.has("param")) put("param", raw.optString("param"))
+        }
+        call.reject(message, code, null, data)
     }
 }

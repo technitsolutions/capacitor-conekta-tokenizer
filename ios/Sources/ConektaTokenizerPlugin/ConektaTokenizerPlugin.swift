@@ -7,7 +7,9 @@ public class ConektaTokenizerPlugin: CAPPlugin, CAPBridgedPlugin {
     public let jsName = "ConektaTokenizer"
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "setPublicKey", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "createToken", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "createToken", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "warmUp", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "isReady", returnType: CAPPluginReturnPromise)
     ]
 
     private let implementation = ConektaTokenizer()
@@ -23,6 +25,21 @@ public class ConektaTokenizerPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         implementation.setPublicKey(publicKey)
         call.resolve()
+    }
+
+    @objc func isReady(_ call: CAPPluginCall) {
+        call.resolve(["ready": implementation.isReady()])
+    }
+
+    @objc func warmUp(_ call: CAPPluginCall) {
+        implementation.warmUp { result in
+            switch result {
+            case .success:
+                call.resolve(["ready": true])
+            case .failure(let error):
+                self.rejectWithConektaError(call: call, error: error)
+            }
+        }
     }
 
     @objc func createToken(_ call: CAPPluginCall) {
@@ -46,15 +63,23 @@ public class ConektaTokenizerPlugin: CAPPlugin, CAPBridgedPlugin {
             case .success(let tokenObj):
                 call.resolve(["token": tokenObj])
             case .failure(let error):
-                if case let ConektaError.apiError(message, code, type, param, raw) = error {
-                    var data: [String: Any] = ["conektaError": raw]
-                    if let type = type { data["type"] = type }
-                    if let param = param { data["param"] = param }
-                    call.reject(message, code, error, data)
-                } else {
-                    call.reject(error.localizedDescription, nil, error)
-                }
+                self.rejectWithConektaError(call: call, error: error)
             }
         }
+    }
+
+    private func rejectWithConektaError(call: CAPPluginCall, error: Error) {
+        if case let ConektaError.apiError(message, code, type, param, raw) = error {
+            var data: [String: Any] = ["conektaError": raw]
+            if let type = type { data["type"] = type }
+            if let param = param { data["param"] = param }
+            call.reject(message, code, error, data)
+            return
+        }
+        if let conektaError = error as? ConektaError {
+            call.reject(conektaError.errorDescription ?? "Conekta error", conektaError.code, error)
+            return
+        }
+        call.reject(error.localizedDescription, nil, error)
     }
 }

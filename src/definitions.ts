@@ -15,6 +15,32 @@ export interface ConektaTokenizerPlugin {
    * @since 1.0.0
    */
   createToken(options: CreateTokenOptions): Promise<CreateTokenResult>;
+
+  /**
+   * Pre-warm the hidden Conekta WebView so the SDK is ready before the user
+   * reaches the payment screen. Resolves when the SDK has loaded. Rejects
+   * with code `sdk_load_timeout` if it does not load within the platform
+   * timeout.
+   *
+   * @since 1.3.1
+   */
+  warmUp(): Promise<IsReadyResult>;
+
+  /**
+   * Return whether the Conekta SDK has finished loading. Does not wait.
+   *
+   * @since 1.3.1
+   */
+  isReady(): Promise<IsReadyResult>;
+}
+
+export interface IsReadyResult {
+  /**
+   * `true` once the hidden Conekta WebView has posted the `ready` signal.
+   *
+   * @since 1.3.1
+   */
+  ready: boolean;
 }
 
 export interface SetPublicKeyOptions {

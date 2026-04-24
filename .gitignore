@@ -2,6 +2,9 @@ dist/
 node_modules/
 ios/Pods/
 ios/.build/
+.build/
+Package.resolved
+.swiftpm/
 android/.gradle/
 android/build/
 .DS_Store

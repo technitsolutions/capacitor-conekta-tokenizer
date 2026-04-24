@@ -80,6 +80,8 @@ the JS side is consistent across all three platforms.
 
 * [`setPublicKey(...)`](#setpublickey)
 * [`createToken(...)`](#createtoken)
+* [`warmUp()`](#warmup)
+* [`isReady()`](#isready)
 * [Interfaces](#interfaces)
 
 </docgen-index>
@@ -126,6 +128,39 @@ and returns a single-use token ID.
 --------------------
 
 
+### warmUp()
+
+```typescript
+warmUp() => Promise<IsReadyResult>
+```
+
+Pre-warm the hidden Conekta WebView so the SDK is ready before the user
+reaches the payment screen. Resolves when the SDK has loaded. Rejects
+with code `sdk_load_timeout` if it does not load within the platform
+timeout.
+
+**Returns:** <code>Promise&lt;<a href="#isreadyresult">IsReadyResult</a>&gt;</code>
+
+**Since:** 1.3.1
+
+--------------------
+
+
+### isReady()
+
+```typescript
+isReady() => Promise<IsReadyResult>
+```
+
+Return whether the Conekta SDK has finished loading. Does not wait.
+
+**Returns:** <code>Promise&lt;<a href="#isreadyresult">IsReadyResult</a>&gt;</code>
+
+**Since:** 1.3.1
+
+--------------------
+
+
 ### Interfaces
 
 
@@ -162,6 +197,13 @@ and returns a single-use token ID.
 | **`expMonth`**   | <code>string</code> | Expiration month (e.g., `"01"` for January).    | 1.0.0 |
 | **`expYear`**    | <code>string</code> | Expiration year (e.g., `"25"` or `"2025"`).     | 1.0.0 |
 | **`cvc`**        | <code>string</code> | Card verification code (3 or 4 digits).         | 1.0.0 |
+
+
+#### IsReadyResult
+
+| Prop        | Type                 | Description                                                           | Since |
+| ----------- | -------------------- | --------------------------------------------------------------------- | ----- |
+| **`ready`** | <code>boolean</code> | `true` once the hidden Conekta WebView has posted the `ready` signal. | 1.3.1 |
 
 </docgen-api>
 
