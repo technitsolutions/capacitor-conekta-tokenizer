@@ -76,10 +76,27 @@ public class ConektaTokenizerPlugin: CAPPlugin, CAPBridgedPlugin {
             call.reject(message, code, error, data)
             return
         }
+        if let conektaError = error as? ConektaError, case let .evaluationFailed(underlying) = conektaError {
+            // Keep the WebKit specifics in `data` for crash reporting — the message stays a
+            // stable, translatable sentence instead of a raw `NSError.localizedDescription`.
+            let nsError = underlying as NSError
+            call.reject(
+                conektaError.errorDescription ?? "Conekta error",
+                conektaError.code,
+                underlying,
+                [
+                    "underlyingDomain": nsError.domain,
+                    "underlyingCode": nsError.code,
+                    "underlyingMessage": nsError.localizedDescription
+                ]
+            )
+            return
+        }
         if let conektaError = error as? ConektaError {
             call.reject(conektaError.errorDescription ?? "Conekta error", conektaError.code, error)
             return
         }
-        call.reject(error.localizedDescription, nil, error)
+        // Never reject without a code: a `nil` code reaches crash reporting as "unknown".
+        call.reject(error.localizedDescription, "unexpected_error", error)
     }
 }

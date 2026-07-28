@@ -1,3 +1,4 @@
+import WebKit
 import XCTest
 @testable import ConektaTokenizerPlugin
 
@@ -59,6 +60,48 @@ class ConektaTokenizerTests: XCTestCase {
         XCTAssertEqual(ConektaError.requestInFlight.code, "request_in_flight")
         XCTAssertEqual(ConektaError.webViewNotReady.code, "webview_not_ready")
         XCTAssertEqual(ConektaError.publicKeyNotSet.code, "public_key_not_set")
+        XCTAssertEqual(
+            ConektaError.evaluationFailed(underlying: NSError(domain: "test", code: 0)).code,
+            "webview_eval_failed"
+        )
+    }
+
+    func testUnsupportedResultTypeIsNotFatal() {
+        let error = NSError(
+            domain: WKError.errorDomain,
+            code: WKError.javaScriptResultTypeIsUnsupported.rawValue
+        )
+        XCTAssertFalse(ConektaTokenizer.isFatalEvaluationError(error))
+    }
+
+    func testOtherEvaluationErrorsAreFatal() {
+        let jsException = NSError(
+            domain: WKError.errorDomain,
+            code: WKError.javaScriptExceptionOccurred.rawValue
+        )
+        XCTAssertTrue(ConektaTokenizer.isFatalEvaluationError(jsException))
+
+        let processGone = NSError(
+            domain: WKError.errorDomain,
+            code: WKError.webContentProcessTerminated.rawValue
+        )
+        XCTAssertTrue(ConektaTokenizer.isFatalEvaluationError(processGone))
+
+        // Same numeric code in a different domain must not be mistaken for the WebKit one.
+        let unrelated = NSError(
+            domain: NSURLErrorDomain,
+            code: WKError.javaScriptResultTypeIsUnsupported.rawValue
+        )
+        XCTAssertTrue(ConektaTokenizer.isFatalEvaluationError(unrelated))
+    }
+
+    func testJSLiteralEscapesQuotesBackslashesAndNewlines() {
+        XCTAssertEqual(ConektaTokenizer.jsLiteral("O'Brien"), "\"O'Brien\"")
+        XCTAssertEqual(ConektaTokenizer.jsLiteral("a\"b"), "\"a\\\"b\"")
+        XCTAssertEqual(ConektaTokenizer.jsLiteral("a\\b"), "\"a\\\\b\"")
+        XCTAssertEqual(ConektaTokenizer.jsLiteral("a\nb"), "\"a\\nb\"")
+        XCTAssertEqual(ConektaTokenizer.jsLiteral("a\u{2028}b"), "\"a\\u2028b\"")
+        XCTAssertEqual(ConektaTokenizer.jsLiteral(""), "\"\"")
     }
 
     func testIsReadyDefaultsFalse() {

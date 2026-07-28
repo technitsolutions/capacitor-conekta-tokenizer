@@ -154,26 +154,61 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
             }
 
             DispatchQueue.main.async {
-                let initJS = "initConekta('\(publicKey.replacingOccurrences(of: "'", with: "\\'"))'); 0"
-                let tokenJS = "createToken('\(name.replacingOccurrences(of: "'", with: "\\'"))', '\(cardNumber)', '\(cvc)', '\(expMonth)', '\(expYear)'); 0"
+                let initJS = "initConekta(\(ConektaTokenizer.jsLiteral(publicKey))); 0"
+                let tokenJS = "createToken("
+                    + "\(ConektaTokenizer.jsLiteral(name)), "
+                    + "\(ConektaTokenizer.jsLiteral(cardNumber)), "
+                    + "\(ConektaTokenizer.jsLiteral(cvc)), "
+                    + "\(ConektaTokenizer.jsLiteral(expMonth)), "
+                    + "\(ConektaTokenizer.jsLiteral(expYear))); 0"
 
                 self.armTokenTimeout()
 
                 webView.evaluateJavaScript(initJS) { [weak self] _, error in
                     guard let self = self else { return }
-                    if let error = error {
-                        self.finishToken(with: .failure(error))
+                    if let error = error, ConektaTokenizer.isFatalEvaluationError(error) {
+                        self.finishToken(with: .failure(ConektaError.evaluationFailed(underlying: error)))
                         return
                     }
                     webView.evaluateJavaScript(tokenJS) { [weak self] _, error in
                         guard let self = self else { return }
-                        if let error = error {
-                            self.finishToken(with: .failure(error))
+                        if let error = error, ConektaTokenizer.isFatalEvaluationError(error) {
+                            self.finishToken(with: .failure(ConektaError.evaluationFailed(underlying: error)))
                         }
                     }
                 }
             }
         }
+    }
+
+    // MARK: - JS evaluation helpers
+
+    /// Encodes a value as a fully escaped JS string literal so a cardholder name containing
+    /// a quote, a backslash or a line break cannot break the script we evaluate. Manual
+    /// quote-escaping only covered `'`, which left `\` and newlines able to produce a syntax
+    /// error instead of a token.
+    static func jsLiteral(_ value: String) -> String {
+        // Wrapped in an array because top-level string fragments need `.fragmentsAllowed`.
+        guard let data = try? JSONSerialization.data(withJSONObject: [value]),
+              let json = String(data: data, encoding: .utf8),
+              json.count > 2 else {
+            return "\"\""
+        }
+        return String(json.dropFirst().dropLast())
+            // Legal in JSON, but line terminators inside a JS string literal predate ES2019.
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+    }
+
+    /// `WKErrorJavaScriptResultTypeIsUnsupported` means the script *ran* and only its completion
+    /// value could not be bridged back to native. That value is never used — tokenization results
+    /// arrive asynchronously over the `conektaResult` message handler — so failing the call here
+    /// would abort a request that is still in flight and drop the token that lands moments later.
+    /// Every other evaluation error means the script did not run, so those still fail fast.
+    static func isFatalEvaluationError(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        guard nsError.domain == WKError.errorDomain else { return true }
+        return nsError.code != WKError.javaScriptResultTypeIsUnsupported.rawValue
     }
 
     private func armTokenTimeout() {
@@ -266,6 +301,7 @@ enum ConektaError: LocalizedError {
     case sdkLoadTimeout
     case tokenRequestTimeout
     case requestInFlight
+    case evaluationFailed(underlying: Error)
     case apiError(message: String, code: String?, type: String?, param: String?, raw: [String: Any])
 
     var errorDescription: String? {
@@ -280,6 +316,8 @@ enum ConektaError: LocalizedError {
             return "Conekta token request timed out."
         case .requestInFlight:
             return "A Conekta token request is already in flight."
+        case .evaluationFailed:
+            return "Could not run the Conekta tokenization script."
         case .apiError(let message, _, _, _, _):
             return message
         }
@@ -292,6 +330,7 @@ enum ConektaError: LocalizedError {
         case .sdkLoadTimeout: return "sdk_load_timeout"
         case .tokenRequestTimeout: return "token_request_timeout"
         case .requestInFlight: return "request_in_flight"
+        case .evaluationFailed: return "webview_eval_failed"
         case .apiError(_, let code, _, _, _): return code
         }
     }
