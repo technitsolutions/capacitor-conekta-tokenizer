@@ -117,6 +117,12 @@ Create a payment token from card details.
 Sends card data directly to the Conekta API (`POST https://api.conekta.io/tokens`)
 and returns a single-use token ID.
 
+On rejection `code` says why: Conekta's own code when the card itself is
+refused, or one of `public_key_not_set`, `request_in_flight`,
+`sdk_load_timeout`, `token_request_timeout`, `webview_not_ready`,
+`webview_eval_failed`, `webview_process_terminated` when tokenization could
+not be attempted. All but the first two are worth retrying.
+
 | Param         | Type                                                              |
 | ------------- | ----------------------------------------------------------------- |
 | **`options`** | <code><a href="#createtokenoptions">CreateTokenOptions</a></code> |
@@ -239,6 +245,12 @@ Instead of using Conekta's iframe tokenizer (which breaks on Capacitor iOS) or d
 3. When `createToken()` is called, it executes `Conekta.Token.create()` inside the hidden WebView
 4. The SDK handles device fingerprinting, PCI compliance, and API communication
 5. The token result is passed back to native code via message handlers
+
+On iOS the hidden WebView is deliberately kept **inside the app's view hierarchy** — 1×1 pt,
+effectively transparent and not interactive. WebKit suspends the content process of a `WKWebView`
+that is not in a window, and a suspended process silently stops answering `evaluateJavaScript` and
+`postMessage`: tokenization then hangs until it times out (`token_request_timeout`). Do not
+"simplify" this back into a detached web view.
 
 This ensures tokens are created through Conekta's official SDK flow and are accepted for charges.
 

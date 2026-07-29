@@ -1,3 +1,4 @@
+import UIKit
 import WebKit
 import XCTest
 @testable import ConektaTokenizerPlugin
@@ -107,5 +108,63 @@ class ConektaTokenizerTests: XCTestCase {
     func testIsReadyDefaultsFalse() {
         let tokenizer = ConektaTokenizer()
         XCTAssertFalse(tokenizer.isReady())
+    }
+
+    func testSetupAttachesHiddenWebViewToHostView() {
+        let window = UIWindow(frame: UIScreen.main.bounds)
+        window.makeKeyAndVisible()
+        let host = UIView(frame: window.bounds)
+        window.addSubview(host)
+
+        let tokenizer = ConektaTokenizer()
+        tokenizer.setup(hostView: host)
+
+        let attached = expectation(description: "web view is parented to the host view")
+        // `setup` hops to the main queue, so assert after it has run.
+        DispatchQueue.main.async {
+            guard let wv = host.subviews.first(where: { $0 is WKWebView }) else {
+                XCTFail("expected the hidden web view to be a subview of the host")
+                return
+            }
+            XCTAssertNotNil(wv.window, "a web view outside a window gets its process suspended")
+            XCTAssertFalse(wv.isHidden, "a hidden view counts as not visible to WebKit")
+            XCTAssertFalse(wv.isUserInteractionEnabled)
+            XCTAssertEqual(wv.frame, ConektaTokenizer.hiddenFrame)
+            XCTAssertEqual(wv.alpha, ConektaTokenizer.hiddenAlpha, accuracy: 0.0001)
+            attached.fulfill()
+        }
+        wait(for: [attached], timeout: 1.0)
+    }
+
+    func testResolveHostPrefersAWindowOverAnOffscreenHost() {
+        let window = UIWindow(frame: UIScreen.main.bounds)
+
+        // A view controller's view during `load()`: built, but not in a window yet. Parenting to
+        // it there would leave the content process unscheduled.
+        let detached = UIView(frame: .zero)
+        XCTAssertTrue(
+            ConektaTokenizer.resolveHost(preferred: detached, fallbackWindow: window) === window
+        )
+
+        window.addSubview(detached)
+        XCTAssertTrue(
+            ConektaTokenizer.resolveHost(preferred: detached, fallbackWindow: window) === detached
+        )
+    }
+
+    func testResolveHostKeepsTheOffscreenHostWhenThereIsNoWindowYet() {
+        let detached = UIView(frame: .zero)
+        XCTAssertTrue(
+            ConektaTokenizer.resolveHost(preferred: detached, fallbackWindow: nil) === detached,
+            "the web view must not be left orphaned; a later attach moves it into a window"
+        )
+        XCTAssertNil(ConektaTokenizer.resolveHost(preferred: nil, fallbackWindow: nil))
+    }
+
+    func testWebContentProcessTerminationCode() {
+        XCTAssertEqual(
+            ConektaError.webContentProcessTerminated.code,
+            "webview_process_terminated"
+        )
     }
 }
