@@ -12,6 +12,12 @@ export interface ConektaTokenizerPlugin {
    * Sends card data directly to the Conekta API (`POST https://api.conekta.io/tokens`)
    * and returns a single-use token ID.
    *
+   * On rejection `code` says why: Conekta's own code when the card itself is
+   * refused, or one of `public_key_not_set`, `request_in_flight`,
+   * `sdk_load_timeout`, `token_request_timeout`, `webview_not_ready`,
+   * `webview_eval_failed`, `webview_process_terminated` when tokenization could
+   * not be attempted. All but the first two are worth retrying.
+   *
    * @since 1.0.0
    */
   createToken(options: CreateTokenOptions): Promise<CreateTokenResult>;

@@ -15,7 +15,9 @@ public class ConektaTokenizerPlugin: CAPPlugin, CAPBridgedPlugin {
     private let implementation = ConektaTokenizer()
 
     override public func load() {
-        implementation.setup()
+        // The hidden web view has to live in the app's view hierarchy or WebKit suspends its
+        // content process and tokenization hangs; give it the bridge's view to parent to.
+        implementation.setup(hostView: bridge?.viewController?.view)
     }
 
     @objc func setPublicKey(_ call: CAPPluginCall) {

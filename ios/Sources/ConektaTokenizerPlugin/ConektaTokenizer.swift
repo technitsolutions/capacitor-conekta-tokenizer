@@ -1,11 +1,20 @@
 import Foundation
+import UIKit
 import WebKit
 
 public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
     public static let sdkReadyTimeout: TimeInterval = 15
     public static let tokenRequestTimeout: TimeInterval = 20
 
+    /// 1×1 pt in the top-left corner, all but transparent and not interactive. Enough for WebKit
+    /// to treat the page as visible, small enough to be imperceptible and never hit by a touch.
+    static let hiddenFrame = CGRect(x: 0, y: 0, width: 1, height: 1)
+    static let hiddenAlpha: CGFloat = 0.01
+
     private var webView: WKWebView?
+    /// View the hidden web view is parented to. Weak so the tokenizer, which lives as long as the
+    /// plugin, never keeps a view controller's view alive.
+    private weak var hostView: UIView?
     private var publicKey: String?
     private var sdkReady = false
     private var sdkReadyWaiters: [(Result<Void, Error>) -> Void] = []
@@ -70,16 +79,80 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
     </html>
     """
 
-    public func setup() {
+    /// - Parameter hostView: view to parent the hidden web view to, normally the Capacitor
+    ///   bridge's view. Optional: when it is not available yet the key window is used instead.
+    public func setup(hostView: UIView? = nil) {
         DispatchQueue.main.async {
-            guard self.webView == nil else { return }
+            if let hostView = hostView {
+                self.hostView = hostView
+            }
+            guard self.webView == nil else {
+                self.attachIfNeeded()
+                return
+            }
             let config = WKWebViewConfiguration()
             config.userContentController.add(self, name: "conektaResult")
-            let wv = WKWebView(frame: .zero, configuration: config)
+            let wv = WKWebView(frame: ConektaTokenizer.hiddenFrame, configuration: config)
             wv.navigationDelegate = self
+            wv.alpha = ConektaTokenizer.hiddenAlpha
+            wv.isUserInteractionEnabled = false
+            wv.isOpaque = false
+            wv.backgroundColor = .clear
+            wv.accessibilityElementsHidden = true
             self.webView = wv
+            self.attachIfNeeded()
+            NotificationCenter.default.addObserver(
+                self,
+                selector: #selector(self.applicationDidBecomeActive),
+                name: UIApplication.didBecomeActiveNotification,
+                object: nil
+            )
             wv.loadHTMLString(ConektaTokenizer.html, baseURL: URL(string: "https://conekta.com"))
         }
+    }
+
+    // MARK: - View hierarchy
+
+    /// WebKit suspends the content process of a web view that is not in a window, and a suspended
+    /// process stops answering `evaluateJavaScript` and `postMessage`. Tokenization then dies on
+    /// the 20 s timeout with no error and nothing having run — the failure mode behind the
+    /// `token_request_timeout` reports, all of them iOS. Keeping the view in the hierarchy is
+    /// what keeps its process scheduled.
+    private func attachIfNeeded() {
+        guard let wv = webView, wv.window == nil else { return }
+        guard let host = ConektaTokenizer.resolveHost(
+            preferred: hostView,
+            fallbackWindow: ConektaTokenizer.keyWindow()
+        ) else { return }
+        if wv.superview !== host {
+            wv.removeFromSuperview()
+            host.addSubview(wv)
+        }
+        wv.frame = ConektaTokenizer.hiddenFrame
+    }
+
+    /// Prefers the view the plugin handed us, but only once it is in a window — during launch the
+    /// bridge's view is not yet, and parenting to it there would leave the process unscheduled.
+    /// Falls back to the preferred view when there is no window at all, so the view is never left
+    /// orphaned; the next `attachIfNeeded` re-runs this and moves it once a window exists.
+    static func resolveHost(preferred: UIView?, fallbackWindow: UIWindow?) -> UIView? {
+        if let preferred = preferred, preferred.window != nil {
+            return preferred
+        }
+        return fallbackWindow ?? preferred
+    }
+
+    static func keyWindow() -> UIWindow? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+    }
+
+    /// The window can change while the app is backgrounded, and a content process killed under
+    /// memory pressure only reports back once we are live again.
+    @objc private func applicationDidBecomeActive() {
+        attachIfNeeded()
     }
 
     public func setPublicKey(_ publicKey: String) {
@@ -162,6 +235,9 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
                     + "\(ConektaTokenizer.jsLiteral(expMonth)), "
                     + "\(ConektaTokenizer.jsLiteral(expYear))); 0"
 
+                // Last chance to get the page back into a window before we depend on it
+                // answering: the window may have changed since the view was created.
+                self.attachIfNeeded()
                 self.armTokenTimeout()
 
                 webView.evaluateJavaScript(initJS) { [weak self] _, error in
@@ -284,6 +360,17 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
         handleNavigationFailure(error: error)
     }
 
+    /// The page died with its process, so nothing will ever answer a request that is in flight —
+    /// without this the call would sit on the spinner for the full 20 s timeout. Reload so the
+    /// next attempt finds a live page, and fail the current one now with a code that says why.
+    public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        sdkReady = false
+        hasAttemptedReload = false
+        attachIfNeeded()
+        webView.loadHTMLString(ConektaTokenizer.html, baseURL: URL(string: "https://conekta.com"))
+        finishToken(with: .failure(ConektaError.webContentProcessTerminated))
+    }
+
     private func handleNavigationFailure(error: Error) {
         if !hasAttemptedReload, let wv = webView {
             hasAttemptedReload = true
@@ -301,6 +388,7 @@ enum ConektaError: LocalizedError {
     case sdkLoadTimeout
     case tokenRequestTimeout
     case requestInFlight
+    case webContentProcessTerminated
     case evaluationFailed(underlying: Error)
     case apiError(message: String, code: String?, type: String?, param: String?, raw: [String: Any])
 
@@ -316,6 +404,8 @@ enum ConektaError: LocalizedError {
             return "Conekta token request timed out."
         case .requestInFlight:
             return "A Conekta token request is already in flight."
+        case .webContentProcessTerminated:
+            return "The Conekta WebView was terminated by the system."
         case .evaluationFailed:
             return "Could not run the Conekta tokenization script."
         case .apiError(let message, _, _, _, _):
@@ -330,6 +420,7 @@ enum ConektaError: LocalizedError {
         case .sdkLoadTimeout: return "sdk_load_timeout"
         case .tokenRequestTimeout: return "token_request_timeout"
         case .requestInFlight: return "request_in_flight"
+        case .webContentProcessTerminated: return "webview_process_terminated"
         case .evaluationFailed: return "webview_eval_failed"
         case .apiError(_, let code, _, _, _): return code
         }
