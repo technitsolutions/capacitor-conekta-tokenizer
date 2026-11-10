@@ -16,12 +16,21 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
     /// plugin, never keeps a view controller's view alive.
     private weak var hostView: UIView?
     private var publicKey: String?
-    private var sdkReady = false
+    private var loadState = SdkLoadState()
     private var sdkReadyWaiters: [(Result<Void, Error>) -> Void] = []
     private var tokenCompletion: ((Result<[String: Any], Error>) -> Void)?
     private var sdkReadyTimeoutItem: DispatchWorkItem?
     private var tokenTimeoutItem: DispatchWorkItem?
-    private var hasAttemptedReload = false
+    /// Identifies the request in flight. The page echoes it on every message, so a late answer
+    /// to a request that already timed out can never complete (or fail) the retry that follows.
+    private var currentRequestId = 0
+    /// Whether the page reported `request_sent` for the request in flight.
+    private var requestSent = false
+    /// Number of times a page (re)load was requested. Internal, for tests.
+    private(set) var pageLoadCount = 0
+    /// Test seam: when set, page loads call this instead of touching a web view, and
+    /// `ensureReady` does not create one. Never set in production.
+    var pageLoaderOverride: (() -> Void)?
 
     private static let html = """
     <!DOCTYPE html>
@@ -29,48 +38,59 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
     <head>
     <script src="https://cdn.conekta.io/js/latest/conekta.js"></script>
     <script>
+    function post(message) {
+        window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify(message));
+    }
+    function sdkAvailable() {
+        return typeof Conekta !== 'undefined' && !!Conekta && !!Conekta.Token;
+    }
+    // `load` also fires when conekta.js failed to load (offline, slow network), so it only
+    // means "ready" when the SDK is actually there.
     window.addEventListener('load', function() {
-        window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({type:'ready'}));
+        post({type: sdkAvailable() ? 'ready' : 'not_loaded'});
     });
-    function initConekta(publicKey) {
+    function initConekta(publicKey, id) {
         try {
-            if (typeof Conekta === 'undefined' || !Conekta) {
-                window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({
-                    type:'token', success:false,
+            if (!sdkAvailable()) {
+                post({
+                    type:'token', id:id, success:false,
                     error: { message_to_purchaser: 'Conekta SDK not loaded', code: 'sdk_not_loaded' }
-                }));
+                });
                 return;
             }
             Conekta.setPublicKey(publicKey);
             Conekta.setLanguage('es');
         } catch (e) {
-            window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({
-                type:'token', success:false,
+            post({
+                type:'token', id:id, success:false,
                 error: { message_to_purchaser: (e && e.message) || 'initConekta threw', code: 'js_exception' }
-            }));
+            });
         }
     }
-    function createToken(name, number, cvc, expMonth, expYear) {
+    function createToken(id, name, number, cvc, expMonth, expYear) {
         try {
-            if (typeof Conekta === 'undefined' || !Conekta || !Conekta.Token) {
-                window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({
-                    type:'token', success:false,
+            if (!sdkAvailable()) {
+                post({
+                    type:'token', id:id, success:false,
                     error: { message_to_purchaser: 'Conekta SDK not loaded', code: 'sdk_not_loaded' }
-                }));
+                });
                 return;
             }
+            // Tells native the page ran and handed the request to conekta.js, so a timeout can
+            // say whether nothing ran (suspended/dead page) or Conekta was slow to answer.
+            post({type:'request_sent', id:id});
             Conekta.Token.create({
                 card: { name: name, number: number, cvc: cvc, exp_month: expMonth, exp_year: expYear }
             }, function(token) {
-                window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({type:'token', success:true, token:token}));
+                post({type:'token', id:id, success:true, token:token});
             }, function(error) {
-                window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({type:'token', success:false, error: error || {message_to_purchaser: 'Token creation failed'}}));
+                post({type:'token', id:id, success:false, error: error || {message_to_purchaser: 'Token creation failed'}});
             });
         } catch (e) {
-            window.webkit.messageHandlers.conektaResult.postMessage(JSON.stringify({
-                type:'token', success:false,
+            post({
+                type:'token', id:id, success:false,
                 error: { message_to_purchaser: (e && e.message) || 'createToken threw', code: 'js_exception' }
-            }));
+            });
         }
     }
     </script>
@@ -107,8 +127,18 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
                 name: UIApplication.didBecomeActiveNotification,
                 object: nil
             )
-            wv.loadHTMLString(ConektaTokenizer.html, baseURL: URL(string: "https://conekta.com"))
+            self.loadPage()
         }
+    }
+
+    private func loadPage() {
+        pageLoadCount += 1
+        if let override = pageLoaderOverride {
+            override()
+            return
+        }
+        guard let wv = webView else { return }
+        wv.loadHTMLString(ConektaTokenizer.html, baseURL: URL(string: "https://conekta.com"))
     }
 
     // MARK: - View hierarchy
@@ -160,7 +190,7 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
     }
 
     public func isReady() -> Bool {
-        return sdkReady
+        return loadState.isReady
     }
 
     public func warmUp(completion: @escaping (Result<Void, Error>) -> Void) {
@@ -168,20 +198,40 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
     }
 
     private func ensureReady(completion: @escaping (Result<Void, Error>) -> Void) {
-        if sdkReady {
+        if loadState.isReady {
             completion(.success(()))
             return
         }
         sdkReadyWaiters.append(completion)
-        if webView == nil {
+        if webView == nil && pageLoaderOverride == nil {
             setup()
         }
         if sdkReadyTimeoutItem == nil {
             let item = DispatchWorkItem { [weak self] in
-                self?.flushReadyWaiters(with: .failure(ConektaError.sdkLoadTimeout))
+                guard let self = self else { return }
+                self.loadState.onReadyTimeout()
+                self.flushReadyWaiters(with: .failure(ConektaError.sdkLoadTimeout))
             }
             sdkReadyTimeoutItem = item
             DispatchQueue.main.asyncAfter(deadline: .now() + ConektaTokenizer.sdkReadyTimeout, execute: item)
+        }
+        // A page that loaded without the SDK (or failed) is reloaded here, which is what lets
+        // a later attempt recover once the network is back.
+        apply(loadState.onEnsureReady())
+    }
+
+    private func apply(_ action: SdkLoadState.Action) {
+        switch action {
+        case .none:
+            break
+        case .reload:
+            loadPage()
+        case .succeedWaiters:
+            flushReadyWaiters(with: .success(()))
+        case .failWaiters(let code):
+            flushReadyWaiters(with: .failure(
+                code == ConektaError.sdkNotLoaded.code ? ConektaError.sdkNotLoaded : ConektaError.webViewNotReady
+            ))
         }
     }
 
@@ -227,8 +277,12 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
             }
 
             DispatchQueue.main.async {
-                let initJS = "initConekta(\(ConektaTokenizer.jsLiteral(publicKey))); 0"
+                self.currentRequestId += 1
+                self.requestSent = false
+                let requestId = self.currentRequestId
+                let initJS = "initConekta(\(ConektaTokenizer.jsLiteral(publicKey)), \(requestId)); 0"
                 let tokenJS = "createToken("
+                    + "\(requestId), "
                     + "\(ConektaTokenizer.jsLiteral(name)), "
                     + "\(ConektaTokenizer.jsLiteral(cardNumber)), "
                     + "\(ConektaTokenizer.jsLiteral(cvc)), "
@@ -290,7 +344,8 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
     private func armTokenTimeout() {
         tokenTimeoutItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
-            self?.finishToken(with: .failure(ConektaError.tokenRequestTimeout))
+            guard let self = self else { return }
+            self.finishToken(with: .failure(ConektaError.tokenRequestTimeout(requestSent: self.requestSent)))
         }
         tokenTimeoutItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + ConektaTokenizer.tokenRequestTimeout, execute: item)
@@ -310,17 +365,31 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
-        guard let body = message.body as? String,
-              let data = body.data(using: .utf8),
+        guard let body = message.body as? String else { return }
+        handleMessage(body)
+    }
+
+    /// Internal so tests can drive the page's messages without a network.
+    func handleMessage(_ body: String) {
+        guard let data = body.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = json["type"] as? String else {
             return
         }
 
+        // Messages about an older request (one that already timed out) must not touch the
+        // current one. Messages without an id predate request ids and are accepted.
+        if let id = json["id"] as? Int, id != currentRequestId {
+            return
+        }
+
         switch type {
         case "ready":
-            sdkReady = true
-            flushReadyWaiters(with: .success(()))
+            apply(loadState.onReady())
+        case "not_loaded":
+            apply(loadState.onNotLoaded(hasWaiters: !sdkReadyWaiters.isEmpty))
+        case "request_sent":
+            requestSent = true
         case "token":
             let success = json["success"] as? Bool ?? false
             if success, let tokenObj = json["token"] as? [String: Any] {
@@ -334,12 +403,18 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
                 } else {
                     raw = [:]
                 }
+                let code = raw["code"] as? String
+                if code == ConektaError.sdkNotLoaded.code {
+                    // The SDK went missing after `ready` (or `ready` came from an older page):
+                    // mark it so the next attempt reloads instead of failing the same way.
+                    apply(loadState.onNotLoaded(hasWaiters: false))
+                }
                 let message = (raw["message_to_purchaser"] as? String)
                     ?? (raw["message"] as? String)
                     ?? "Token creation failed"
                 finishToken(with: .failure(ConektaError.apiError(
                     message: message,
-                    code: raw["code"] as? String,
+                    code: code,
                     type: raw["type"] as? String,
                     param: raw["param"] as? String,
                     raw: raw
@@ -364,21 +439,22 @@ public class ConektaTokenizer: NSObject, WKScriptMessageHandler, WKNavigationDel
     /// without this the call would sit on the spinner for the full 20 s timeout. Reload so the
     /// next attempt finds a live page, and fail the current one now with a code that says why.
     public func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        sdkReady = false
-        hasAttemptedReload = false
         attachIfNeeded()
-        webView.loadHTMLString(ConektaTokenizer.html, baseURL: URL(string: "https://conekta.com"))
+        apply(loadState.onProcessTerminated())
         finishToken(with: .failure(ConektaError.webContentProcessTerminated))
     }
 
     private func handleNavigationFailure(error: Error) {
-        if !hasAttemptedReload, let wv = webView {
-            hasAttemptedReload = true
-            wv.loadHTMLString(ConektaTokenizer.html, baseURL: URL(string: "https://conekta.com"))
+        // Starting a new load cancels the one in progress; that is not a failure of the page.
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled {
             return
         }
-        flushReadyWaiters(with: .failure(ConektaError.webViewNotReady))
-        finishToken(with: .failure(ConektaError.webViewNotReady))
+        let action = loadState.onNavigationFailure()
+        apply(action)
+        if case .failWaiters = action {
+            finishToken(with: .failure(ConektaError.webViewNotReady))
+        }
     }
 }
 
@@ -386,7 +462,10 @@ enum ConektaError: LocalizedError {
     case publicKeyNotSet
     case webViewNotReady
     case sdkLoadTimeout
-    case tokenRequestTimeout
+    case sdkNotLoaded
+    /// `requestSent` says whether the page reported handing the request to conekta.js: `false`
+    /// means nothing ran (suspended or dead page), `true` means Conekta did not answer in time.
+    case tokenRequestTimeout(requestSent: Bool)
     case requestInFlight
     case webContentProcessTerminated
     case evaluationFailed(underlying: Error)
@@ -400,6 +479,8 @@ enum ConektaError: LocalizedError {
             return "Conekta WebView is not ready."
         case .sdkLoadTimeout:
             return "Conekta SDK did not load in time."
+        case .sdkNotLoaded:
+            return "Conekta SDK not loaded"
         case .tokenRequestTimeout:
             return "Conekta token request timed out."
         case .requestInFlight:
@@ -418,6 +499,7 @@ enum ConektaError: LocalizedError {
         case .publicKeyNotSet: return "public_key_not_set"
         case .webViewNotReady: return "webview_not_ready"
         case .sdkLoadTimeout: return "sdk_load_timeout"
+        case .sdkNotLoaded: return "sdk_not_loaded"
         case .tokenRequestTimeout: return "token_request_timeout"
         case .requestInFlight: return "request_in_flight"
         case .webContentProcessTerminated: return "webview_process_terminated"

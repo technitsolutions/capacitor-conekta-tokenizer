@@ -14,9 +14,14 @@ export interface ConektaTokenizerPlugin {
    *
    * On rejection `code` says why: Conekta's own code when the card itself is
    * refused, or one of `public_key_not_set`, `request_in_flight`,
-   * `sdk_load_timeout`, `token_request_timeout`, `webview_not_ready`,
-   * `webview_eval_failed`, `webview_process_terminated` when tokenization could
-   * not be attempted. All but the first two are worth retrying.
+   * `sdk_load_timeout`, `sdk_not_loaded`, `token_request_timeout`,
+   * `webview_not_ready`, `webview_eval_failed`, `webview_process_terminated`
+   * when tokenization could not be attempted. All but the first two are worth
+   * retrying: after `sdk_not_loaded` the next call reloads the SDK.
+   *
+   * On `token_request_timeout` (native only), `data.requestSent` says whether
+   * the request reached `conekta.js`: `false` means nothing ran (suspended or
+   * dead WebView), `true` means Conekta did not answer in time.
    *
    * @since 1.0.0
    */
@@ -26,7 +31,9 @@ export interface ConektaTokenizerPlugin {
    * Pre-warm the hidden Conekta WebView so the SDK is ready before the user
    * reaches the payment screen. Resolves when the SDK has loaded. Rejects
    * with code `sdk_load_timeout` if it does not load within the platform
-   * timeout.
+   * timeout, or `sdk_not_loaded` if the page loaded without the SDK twice
+   * (offline). A page that loaded without the SDK is reloaded on the next
+   * `warmUp` or `createToken`, so calling again once online recovers.
    *
    * @since 1.3.1
    */
@@ -42,7 +49,9 @@ export interface ConektaTokenizerPlugin {
 
 export interface IsReadyResult {
   /**
-   * `true` once the hidden Conekta WebView has posted the `ready` signal.
+   * `true` once the hidden Conekta WebView has loaded `conekta.js` (since
+   * 1.4.0 the page only reports ready when `Conekta` is defined, not merely
+   * when the page's `load` event fired).
    *
    * @since 1.3.1
    */
@@ -188,4 +197,17 @@ export interface ConektaTokenError extends Error {
    * Full raw error envelope as returned by `conekta.js`.
    */
   conektaError?: ConektaRawError;
+
+  /**
+   * Native payload of the rejection. On `token_request_timeout` it carries
+   * `requestSent` (since 1.4.0): `false` when the request never reached
+   * `conekta.js` (the WebView did not run it), `true` when Conekta was slow.
+   */
+  data?: {
+    conektaError?: ConektaRawError;
+    type?: string;
+    param?: string;
+    requestSent?: boolean;
+    [key: string]: unknown;
+  };
 }

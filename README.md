@@ -74,6 +74,11 @@ On native platforms (iOS / Android) the same fields are surfaced through
 Capacitor's error payload (`code` and `data.conektaError`), so the shape on
 the JS side is consistent across all three platforms.
 
+On `token_request_timeout`, `data.requestSent` (native, since 1.4.0) tells the
+two causes apart: `false` means the hidden page never ran the request (a
+suspended or dead WebView), `true` means it reached `conekta.js` and Conekta
+did not answer in time. The rejection code itself is unchanged.
+
 ## API
 
 <docgen-index>
@@ -119,9 +124,14 @@ and returns a single-use token ID.
 
 On rejection `code` says why: Conekta's own code when the card itself is
 refused, or one of `public_key_not_set`, `request_in_flight`,
-`sdk_load_timeout`, `token_request_timeout`, `webview_not_ready`,
-`webview_eval_failed`, `webview_process_terminated` when tokenization could
-not be attempted. All but the first two are worth retrying.
+`sdk_load_timeout`, `sdk_not_loaded`, `token_request_timeout`,
+`webview_not_ready`, `webview_eval_failed`, `webview_process_terminated`
+when tokenization could not be attempted. All but the first two are worth
+retrying: after `sdk_not_loaded` the next call reloads the SDK.
+
+On `token_request_timeout` (native only), `data.requestSent` says whether
+the request reached `conekta.js`: `false` means nothing ran (suspended or
+dead WebView), `true` means Conekta did not answer in time.
 
 | Param         | Type                                                              |
 | ------------- | ----------------------------------------------------------------- |
@@ -143,7 +153,9 @@ warmUp() => Promise<IsReadyResult>
 Pre-warm the hidden Conekta WebView so the SDK is ready before the user
 reaches the payment screen. Resolves when the SDK has loaded. Rejects
 with code `sdk_load_timeout` if it does not load within the platform
-timeout.
+timeout, or `sdk_not_loaded` if the page loaded without the SDK twice
+(offline). A page that loaded without the SDK is reloaded on the next
+`warmUp` or `createToken`, so calling again once online recovers.
 
 **Returns:** <code>Promise&lt;<a href="#isreadyresult">IsReadyResult</a>&gt;</code>
 
@@ -207,9 +219,9 @@ Return whether the Conekta SDK has finished loading. Does not wait.
 
 #### IsReadyResult
 
-| Prop        | Type                 | Description                                                           | Since |
-| ----------- | -------------------- | --------------------------------------------------------------------- | ----- |
-| **`ready`** | <code>boolean</code> | `true` once the hidden Conekta WebView has posted the `ready` signal. | 1.3.1 |
+| Prop        | Type                 | Description                                                                                                                                                                        | Since |
+| ----------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| **`ready`** | <code>boolean</code> | `true` once the hidden Conekta WebView has loaded `conekta.js` (since 1.4.0 the page only reports ready when `Conekta` is defined, not merely when the page's `load` event fired). | 1.3.1 |
 
 </docgen-api>
 
@@ -251,6 +263,16 @@ effectively transparent and not interactive. WebKit suspends the content process
 that is not in a window, and a suspended process silently stops answering `evaluateJavaScript` and
 `postMessage`: tokenization then hangs until it times out (`token_request_timeout`). Do not
 "simplify" this back into a detached web view.
+
+The page only reports itself ready when `Conekta` is actually defined. Its `load` event also
+fires when `conekta.js` failed to download (offline at app start, a slow network), and treating
+that as ready used to leave every later attempt failing with `sdk_not_loaded` until the app was
+restarted. Now a page that loaded without the SDK is reloaded on the next `warmUp()` or
+`createToken()` (once per attempt; if the reload also misses it, the call fails fast with
+`sdk_not_loaded`), so a later attempt recovers once the network is back.
+
+Every tokenization carries a request id that the page echoes back, so a late answer to a request
+that already timed out can never complete or fail the retry that follows it.
 
 This ensures tokens are created through Conekta's official SDK flow and are accepted for charges.
 
