@@ -25,48 +25,59 @@ class ConektaTokenizer {
             <head>
             <script src="https://cdn.conekta.io/js/latest/conekta.js"></script>
             <script>
+            function post(message) {
+                ConektaBridge.onResult(JSON.stringify(message));
+            }
+            function sdkAvailable() {
+                return typeof Conekta !== 'undefined' && !!Conekta && !!Conekta.Token;
+            }
+            // `load` also fires when conekta.js failed to load (offline, slow network), so it
+            // only means "ready" when the SDK is actually there.
             window.addEventListener('load', function() {
-                ConektaBridge.onResult(JSON.stringify({type:'ready'}));
+                post({type: sdkAvailable() ? 'ready' : 'not_loaded'});
             });
-            function initConekta(publicKey) {
+            function initConekta(publicKey, id) {
                 try {
-                    if (typeof Conekta === 'undefined' || !Conekta) {
-                        ConektaBridge.onResult(JSON.stringify({
-                            type:'token', success:false,
+                    if (!sdkAvailable()) {
+                        post({
+                            type:'token', id:id, success:false,
                             error: { message_to_purchaser: 'Conekta SDK not loaded', code: 'sdk_not_loaded' }
-                        }));
+                        });
                         return;
                     }
                     Conekta.setPublicKey(publicKey);
                     Conekta.setLanguage('es');
                 } catch (e) {
-                    ConektaBridge.onResult(JSON.stringify({
-                        type:'token', success:false,
+                    post({
+                        type:'token', id:id, success:false,
                         error: { message_to_purchaser: (e && e.message) || 'initConekta threw', code: 'js_exception' }
-                    }));
+                    });
                 }
             }
-            function createToken(name, number, cvc, expMonth, expYear) {
+            function createToken(id, name, number, cvc, expMonth, expYear) {
                 try {
-                    if (typeof Conekta === 'undefined' || !Conekta || !Conekta.Token) {
-                        ConektaBridge.onResult(JSON.stringify({
-                            type:'token', success:false,
+                    if (!sdkAvailable()) {
+                        post({
+                            type:'token', id:id, success:false,
                             error: { message_to_purchaser: 'Conekta SDK not loaded', code: 'sdk_not_loaded' }
-                        }));
+                        });
                         return;
                     }
+                    // Tells native the page ran and handed the request to conekta.js, so a
+                    // timeout can say whether nothing ran or Conekta was slow to answer.
+                    post({type:'request_sent', id:id});
                     Conekta.Token.create({
                         card: { name: name, number: number, cvc: cvc, exp_month: expMonth, exp_year: expYear }
                     }, function(token) {
-                        ConektaBridge.onResult(JSON.stringify({type:'token', success:true, token:token}));
+                        post({type:'token', id:id, success:true, token:token});
                     }, function(error) {
-                        ConektaBridge.onResult(JSON.stringify({type:'token', success:false, error: error || {message_to_purchaser: 'Token creation failed'}}));
+                        post({type:'token', id:id, success:false, error: error || {message_to_purchaser: 'Token creation failed'}});
                     });
                 } catch (e) {
-                    ConektaBridge.onResult(JSON.stringify({
-                        type:'token', success:false,
+                    post({
+                        type:'token', id:id, success:false,
                         error: { message_to_purchaser: (e && e.message) || 'createToken threw', code: 'js_exception' }
-                    }));
+                    });
                 }
             }
             </script>
@@ -76,17 +87,27 @@ class ConektaTokenizer {
         """.trimIndent()
     }
 
-    data class ConektaFailure(val raw: JSONObject, val code: String?)
+    /**
+     * @property requestSent only for `token_request_timeout`: whether the page reported handing
+     *   the request to conekta.js (`false` = nothing ran, `true` = Conekta did not answer in time).
+     */
+    data class ConektaFailure(val raw: JSONObject, val code: String?, val requestSent: Boolean? = null)
 
     private var webView: WebView? = null
     private var publicKey: String? = null
-    private var sdkReady = false
+    private val loadState = SdkLoadState()
     private var sdkReadyWaiters: MutableList<(Boolean, ConektaFailure?) -> Unit> = mutableListOf()
     private var tokenSuccess: ((JSONObject) -> Unit)? = null
     private var tokenError: ((ConektaFailure) -> Unit)? = null
     private var sdkReadyTimeout: Runnable? = null
     private var tokenTimeout: Runnable? = null
-    private var hasAttemptedReload = false
+    /**
+     * Identifies the request in flight. The page echoes it on every message, so a late answer
+     * to a request that already timed out can never complete (or fail) the retry that follows.
+     */
+    private var currentRequestId = 0
+    /** Whether the page reported `request_sent` for the request in flight. */
+    private var requestSent = false
     private lateinit var mainHandler: Handler
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -109,16 +130,20 @@ class ConektaTokenizer {
                     }
                 }
             }
-            wv.loadDataWithBaseURL("https://conekta.com", HTML, "text/html", "UTF-8", null)
             webView = wv
+            loadPage()
         }
+    }
+
+    private fun loadPage() {
+        webView?.loadDataWithBaseURL("https://conekta.com", HTML, "text/html", "UTF-8", null)
     }
 
     fun setPublicKey(publicKey: String) {
         this.publicKey = publicKey
     }
 
-    fun isReady(): Boolean = sdkReady
+    fun isReady(): Boolean = loadState.isReady
 
     fun warmUp(
         activity: Activity,
@@ -132,16 +157,42 @@ class ConektaTokenizer {
     }
 
     private fun ensureReady(callback: (Boolean, ConektaFailure?) -> Unit) {
-        if (sdkReady) {
+        if (loadState.isReady) {
             callback(true, null)
             return
         }
         sdkReadyWaiters.add(callback)
         if (sdkReadyTimeout == null) {
-            val r = Runnable { flushReadyWaiters(false, sdkTimeoutFailure()) }
+            val r = Runnable {
+                loadState.onReadyTimeout()
+                flushReadyWaiters(false, sdkTimeoutFailure())
+            }
             sdkReadyTimeout = r
             mainHandler.postDelayed(r, SDK_READY_TIMEOUT_MS)
         }
+        // A page that loaded without the SDK (or failed) is reloaded here, which is what lets a
+        // later attempt recover once the network is back. The page must be touched on the main
+        // thread, where every caller of ensureReady already runs except the plugin call itself.
+        mainHandler.post { apply(loadState.onEnsureReady()) }
+    }
+
+    private fun apply(action: SdkLoadState.Action) {
+        when (action) {
+            SdkLoadState.Action.None -> Unit
+            SdkLoadState.Action.Reload -> loadPage()
+            SdkLoadState.Action.SucceedWaiters -> flushReadyWaiters(true, null)
+            is SdkLoadState.Action.FailWaiters -> flushReadyWaiters(false, loadFailure(action.code))
+        }
+    }
+
+    private fun loadFailure(code: String): ConektaFailure {
+        val message = if (code == SdkLoadState.SDK_NOT_LOADED) {
+            "Conekta SDK not loaded"
+        } else {
+            "Conekta WebView is not ready."
+        }
+        val raw = JSONObject().put("message_to_purchaser", message).put("code", code)
+        return ConektaFailure(raw, code)
     }
 
     private fun flushReadyWaiters(ok: Boolean, failure: ConektaFailure?) {
@@ -163,7 +214,8 @@ class ConektaTokenizer {
         val raw = JSONObject()
             .put("message_to_purchaser", "Conekta token request timed out.")
             .put("code", "token_request_timeout")
-        return ConektaFailure(raw, "token_request_timeout")
+            .put("requestSent", requestSent)
+        return ConektaFailure(raw, "token_request_timeout", requestSent)
     }
 
     fun createToken(
@@ -213,11 +265,14 @@ class ConektaTokenizer {
                 val escapedKey = key.replace("'", "\\'")
                 val escapedName = name.replace("'", "\\'")
 
+                currentRequestId += 1
+                requestSent = false
+                val requestId = currentRequestId
                 armTokenTimeout()
 
-                wv.evaluateJavascript("initConekta('$escapedKey')", null)
+                wv.evaluateJavascript("initConekta('$escapedKey', $requestId)", null)
                 wv.evaluateJavascript(
-                    "createToken('$escapedName', '$cardNumber', '$cvc', '$expMonth', '$expYear')",
+                    "createToken($requestId, '$escapedName', '$cardNumber', '$cvc', '$expMonth', '$expYear')",
                     null
                 )
             }
@@ -250,16 +305,11 @@ class ConektaTokenizer {
     }
 
     private fun handleNavigationFailure() {
-        if (!hasAttemptedReload) {
-            hasAttemptedReload = true
-            webView?.loadDataWithBaseURL("https://conekta.com", HTML, "text/html", "UTF-8", null)
-            return
+        val action = loadState.onNavigationFailure()
+        apply(action)
+        if (action is SdkLoadState.Action.FailWaiters) {
+            finishTokenError(loadFailure(SdkLoadState.WEBVIEW_NOT_READY))
         }
-        val raw = JSONObject()
-            .put("message_to_purchaser", "Conekta WebView is not ready.")
-            .put("code", "webview_not_ready")
-        flushReadyWaiters(false, ConektaFailure(raw, "webview_not_ready"))
-        finishTokenError(ConektaFailure(raw, "webview_not_ready"))
     }
 
     @JavascriptInterface
@@ -267,11 +317,15 @@ class ConektaTokenizer {
         mainHandler.post {
             try {
                 val json = JSONObject(jsonStr)
+                // Messages about an older request (one that already timed out) must not touch
+                // the current one. Messages without an id predate request ids.
+                if (json.has("id") && json.optInt("id", -1) != currentRequestId) {
+                    return@post
+                }
                 when (json.optString("type")) {
-                    "ready" -> {
-                        sdkReady = true
-                        flushReadyWaiters(true, null)
-                    }
+                    "ready" -> apply(loadState.onReady())
+                    "not_loaded" -> apply(loadState.onNotLoaded(hasWaiters = sdkReadyWaiters.isNotEmpty()))
+                    "request_sent" -> requestSent = true
                     "token" -> {
                         val success = json.optBoolean("success", false)
                         if (success) {
@@ -284,6 +338,11 @@ class ConektaTokenizer {
                                     json.optString("error", "Token creation failed")
                                 )
                             val code = if (raw.has("code")) raw.optString("code") else null
+                            if (code == SdkLoadState.SDK_NOT_LOADED) {
+                                // The SDK went missing after `ready`: mark it so the next
+                                // attempt reloads instead of failing the same way.
+                                apply(loadState.onNotLoaded(hasWaiters = false))
+                            }
                             finishTokenError(ConektaFailure(raw, code))
                         }
                     }

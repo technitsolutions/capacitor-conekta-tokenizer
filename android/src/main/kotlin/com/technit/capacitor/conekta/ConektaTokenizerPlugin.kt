@@ -80,6 +80,7 @@ class ConektaTokenizerPlugin : Plugin() {
             put("conektaError", JSObject(raw.toString()))
             if (raw.has("type")) put("type", raw.optString("type"))
             if (raw.has("param")) put("param", raw.optString("param"))
+            failure.requestSent?.let { put("requestSent", it) }
         }
         call.reject(message, code, null, data)
     }

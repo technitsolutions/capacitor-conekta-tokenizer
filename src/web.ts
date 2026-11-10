@@ -35,11 +35,24 @@ export class ConektaTokenizerWeb extends WebPlugin implements ConektaTokenizerPl
       const script = document.createElement('script');
       script.src = 'https://cdn.conekta.io/js/latest/conekta.js';
       script.async = true;
+      // A failed load must not be cached: forget it so the next call retries once the
+      // network is back, instead of rejecting with the same error until a page reload.
+      const fail = () => {
+        script.remove();
+        this.sdkLoading = null;
+        const e = new Error('Conekta SDK not loaded') as ConektaTokenError;
+        e.code = 'sdk_not_loaded';
+        reject(e);
+      };
       script.onload = () => {
+        if (typeof Conekta === 'undefined' || !Conekta?.Token) {
+          fail();
+          return;
+        }
         this.sdkLoaded = true;
         resolve();
       };
-      script.onerror = () => reject(new Error('Failed to load Conekta JS SDK'));
+      script.onerror = fail;
       document.head.appendChild(script);
     });
 
@@ -86,8 +99,7 @@ export class ConektaTokenizerWeb extends WebPlugin implements ConektaTokenizerPl
         (token) => resolve({ token }),
         (err) => {
           const raw: ConektaRawError = err ?? {};
-          const message =
-            raw.message_to_purchaser || raw.message || 'Conekta token error';
+          const message = raw.message_to_purchaser || raw.message || 'Conekta token error';
           const e = new Error(message) as ConektaTokenError;
           if (typeof raw.code === 'string') e.code = raw.code;
           if (typeof raw.type === 'string') e.type = raw.type;

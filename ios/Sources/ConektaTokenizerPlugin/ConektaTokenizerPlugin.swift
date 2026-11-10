@@ -94,6 +94,16 @@ public class ConektaTokenizerPlugin: CAPPlugin, CAPBridgedPlugin {
             )
             return
         }
+        if let conektaError = error as? ConektaError, case let .tokenRequestTimeout(requestSent) = conektaError {
+            // `requestSent` tells a page that never ran (false) from a slow Conekta (true).
+            call.reject(
+                conektaError.errorDescription ?? "Conekta error",
+                conektaError.code,
+                error,
+                ["requestSent": requestSent]
+            )
+            return
+        }
         if let conektaError = error as? ConektaError {
             call.reject(conektaError.errorDescription ?? "Conekta error", conektaError.code, error)
             return
