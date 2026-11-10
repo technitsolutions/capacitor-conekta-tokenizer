@@ -51,6 +51,8 @@ dependencies {
     implementation project(':capacitor-android')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
     testImplementation "junit:junit:$junitVersion"
+    // Test-only JS engine: runs the scripts the tokenizer builds to prove card data survives intact.
+    testImplementation "org.mozilla:rhino:1.7.15"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
 }
