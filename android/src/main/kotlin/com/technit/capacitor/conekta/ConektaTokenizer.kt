@@ -85,6 +85,60 @@ class ConektaTokenizer {
             <body></body>
             </html>
         """.trimIndent()
+
+        private const val HEX = "0123456789abcdef"
+
+        /**
+         * Encodes [value] as a double-quoted JS string literal that is also valid JSON, so card
+         * data can never break or alter the script it is placed in. 1.4.0 and earlier only
+         * escaped `'`, so a backslash or a line break in the cardholder name produced a syntax
+         * error (or a different string) instead of a token, and the other fields were not
+         * escaped at all.
+         *
+         * Everything outside printable ASCII is written as a `\uXXXX` escape (one per UTF-16
+         * unit, which JS and JSON both rejoin), and so are `<`, `>` and `&`. That covers line
+         * breaks, U+2028/U+2029 (line terminators inside a string literal before ES2019), other
+         * control characters and `</script>`-like sequences, and keeps the output identical on
+         * every Android version. `org.json`'s `JSONObject.quote` is not used because Android's
+         * copy leaves U+2028/U+2029 raw and is only a stub in local unit tests, so the tests
+         * could not exercise the code that ships.
+         */
+        internal fun jsLiteral(value: String): String {
+            val out = StringBuilder(value.length + 2)
+            out.append('"')
+            for (c in value) {
+                when {
+                    c == '"' -> out.append("\\\"")
+                    c == '\\' -> out.append("\\\\")
+                    c == '<' || c == '>' || c == '&' || c < ' ' || c > '~' -> {
+                        val code = c.code
+                        out.append("\\u")
+                            .append(HEX[(code shr 12) and 0xF])
+                            .append(HEX[(code shr 8) and 0xF])
+                            .append(HEX[(code shr 4) and 0xF])
+                            .append(HEX[code and 0xF])
+                    }
+                    else -> out.append(c)
+                }
+            }
+            out.append('"')
+            return out.toString()
+        }
+
+        /** Script that points conekta.js at [publicKey] for request [requestId]. */
+        internal fun initScript(publicKey: String, requestId: Int): String =
+            "initConekta(${jsLiteral(publicKey)}, $requestId)"
+
+        /** Script that asks the page to tokenize the card for request [requestId]. */
+        internal fun createTokenScript(
+            requestId: Int,
+            name: String,
+            cardNumber: String,
+            cvc: String,
+            expMonth: String,
+            expYear: String
+        ): String = "createToken($requestId, ${jsLiteral(name)}, ${jsLiteral(cardNumber)}, " +
+            "${jsLiteral(cvc)}, ${jsLiteral(expMonth)}, ${jsLiteral(expYear)})"
     }
 
     /**
@@ -262,17 +316,14 @@ class ConektaTokenizer {
                     return@post
                 }
 
-                val escapedKey = key.replace("'", "\\'")
-                val escapedName = name.replace("'", "\\'")
-
                 currentRequestId += 1
                 requestSent = false
                 val requestId = currentRequestId
                 armTokenTimeout()
 
-                wv.evaluateJavascript("initConekta('$escapedKey', $requestId)", null)
+                wv.evaluateJavascript(initScript(key, requestId), null)
                 wv.evaluateJavascript(
-                    "createToken($requestId, '$escapedName', '$cardNumber', '$cvc', '$expMonth', '$expYear')",
+                    createTokenScript(requestId, name, cardNumber, cvc, expMonth, expYear),
                     null
                 )
             }
